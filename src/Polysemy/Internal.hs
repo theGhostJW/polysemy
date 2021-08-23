@@ -17,7 +17,6 @@ module Polysemy.Internal
   , sendUsing
   , embed
   , run
-  , runM
   , raise_
   , Raise (..)
   , raise
@@ -92,7 +91,7 @@ import Polysemy.Internal.Union
 -- than 'Embed', but also less flexible to interpret.
 --
 -- A 'Sem' can be interpreted as a pure value (via 'run') or as any
--- traditional 'Monad' (via 'runM' or 'Polysemy.runFinal').
+-- traditional 'Monad' (via 'Polysemy.runM').
 -- Each effect @E@ comes equipped with some interpreters of the form:
 --
 -- @
@@ -602,19 +601,6 @@ embed = send . Embed
 run :: Sem '[] a -> a
 run (Sem m) = runIdentity $ m absurdU
 {-# INLINE run #-}
-
-
-------------------------------------------------------------------------------
--- | Lower a 'Sem' containing only a single lifted 'Monad' into that
--- monad.
-runM :: Monad m => Sem '[Embed m] a -> m a
-runM (Sem m) = m $ \z ->
-  case extract z of
-    Weaving e _ lwr ex -> do
-      let s = mkInitState lwr
-      a <- unEmbed e
-      pure $ ex $ a <$ s
-{-# INLINE runM #-}
 
 
 type family Append l r where
