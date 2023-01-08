@@ -61,4 +61,4 @@ runReader i = interpretH $ \case
 --
 -- @since 1.0.0.0
 inputToReader :: forall i r a. Member (Reader i) r => Sem (Input i ': r) a -> Sem r a
-inputToReader = transform @_ @(Reader i) (\Input -> Ask)
+inputToReader = transform @(Reader i) (\Input -> Ask)

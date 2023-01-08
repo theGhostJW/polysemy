@@ -13,75 +13,112 @@ module Polysemy.Internal.Combinators
   , lazilyStateful
   ) where
 
-import           Control.Monad
-import qualified Control.Monad.Trans.State.Lazy as LS
-import qualified Control.Monad.Trans.State.Strict as S
-import qualified Data.Tuple as S (swap)
-
+import Data.Traversable
+import Data.Foldable
+import Data.Coerce
 import Polysemy.Internal
 import Polysemy.Internal.Union
+import Polysemy.Internal.Core
+import Polysemy.Internal.Utils
+import Polysemy.Internal.WeaveClass
 
-------------------------------------------------------------------------------
--- | A highly-performant combinator for interpreting an effect statefully. See
--- 'stateful' for a more user-friendly variety of this function.
-interpretInStateT
-    :: (∀ x m. e m x -> S.StateT s (Sem r) x)
-    -> s
-    -> Sem (e ': r) a
-    -> Sem r (s, a)
-interpretInStateT f s (Sem sem) = Sem $ \k ->
-  (S.swap <$!>) $ flip S.runStateT s $ sem $ \u ->
-    case decomp u of
-        Left x ->
-          liftHandlerWithNat
-            (\m -> S.StateT $ \s' -> S.swap <$!> interpretInStateT f s' m)
-            k x
-        Right (Weaving e _ lwr ex) -> do
-          let z = mkInitState lwr
-          ex . (<$ z) <$> S.mapStateT (usingSem k) (f e)
-{-# INLINE interpretInStateT #-}
+runWeaveState :: s -> Sem (Weave ((,) s) ': r) a -> Sem r (s, a)
+runWeaveState s0 sem0 = Sem $ \k c0 ->
+  runSem sem0
+    (\u c s -> case decomp u of
+        Left g -> (`k` (\(s', x) -> c x s')) $
+          weave
+            (s, ())
+            (uncurry runWeaveState)
+            (runWeaveState s)
+            g
+        Right wav -> fromFOEff wav $ \ex -> \case
+          RestoreW (s', a) -> c (ex a) s'
+          GetStateW main -> c (ex (main ((,) s))) s
+          LiftWithW main -> c (ex (main (runWeaveState s))) s
+    )
+    (\a s -> c0 (s, a))
+    s0
 
-
-------------------------------------------------------------------------------
--- | A highly-performant combinator for interpreting an effect statefully. See
--- 'stateful' for a more user-friendly variety of this function.
-interpretInLazyStateT
-    :: (∀ x m. e m x -> LS.StateT s (Sem r) x)
-    -> s
-    -> Sem (e ': r) a
-    -> Sem r (s, a)
-interpretInLazyStateT f s (Sem sem) = Sem $ \k ->
-  fmap S.swap $ flip LS.runStateT s $ sem $ \u ->
-    case decomp u of
-        Left x ->
-          liftHandlerWithNat
-            (\m -> LS.StateT $ \s' -> S.swap <$> interpretInLazyStateT f s' m)
-            k x
-        Right (Weaving e _ lwr ex) -> do
-          let z = mkInitState lwr
-          ex . (<$ z) <$> LS.mapStateT (usingSem k) (f e)
-{-# INLINE interpretInLazyStateT #-}
-
+runWeaveLazyState :: s -> Sem (Weave (LazyT2 s) ': r) a -> Sem r (LazyT2 s a)
+runWeaveLazyState s0 sem0 = Sem $ \k c0 ->
+  runSem sem0
+    (\u c s -> case decomp u of
+        Left g -> (`k` (\(LazyT2 ~(s', x)) -> c x s')) $
+          weave
+            (LazyT2 (s, ()))
+            (\(LazyT2 ~(s', sem)) -> coerce $ runWeaveLazyState s' sem)
+            (coerce #. runWeaveLazyState s)
+            g
+        Right wav -> fromFOEff wav $ \ex -> \case
+          RestoreW (LazyT2 ~(s', a)) -> c (ex a) s'
+          GetStateW main -> c (ex (main (LazyT2 #. (,) s))) s
+          LiftWithW main -> c (ex (main (runWeaveLazyState s))) s
+    )
+    (\a s -> c0 (LazyT2 (s, a)))
+    s0
 
 ------------------------------------------------------------------------------
 -- | Like 'interpret', but with access to an intermediate state @s@.
 stateful
-    :: (∀ x m. e m x -> s -> Sem r (s, x))
-    -> s
-    -> Sem (e ': r) a
-    -> Sem r (s, a)
-stateful f = interpretInStateT $ \e -> S.StateT $ (S.swap <$!>) . f e
+    :: forall s e r a
+     . (∀ x m. e m x -> s -> Sem r (s, x))
+    -> s -> Sem (e ': r) a -> Sem r (s, a)
+stateful f = go
+  where
+    go :: forall x. s -> Sem (e ': r) x -> Sem r (s, x)
+    go s0 sem0 = Sem $ \k c0 ->
+      runSem sem0
+        (\u c s -> case decomp u of
+            Left g -> (`k` (\(s', x) -> c x s')) $
+              weave
+                (s, ())
+                (uncurry go_)
+                (runWeaveState s)
+                g
+            Right wav -> fromFOEff wav $ \ex e ->
+              runSem (f e s) k (\(s', x) -> c (ex x) s')
+        )
+        (\a s -> c0 (s, a))
+        s0
+    {-# INLINE go #-}
+
+    go_ :: forall x. s -> Sem (e ': r) x -> Sem r (s, x)
+    go_ = go
+    {-# NOINLINE go_ #-}
 {-# INLINE[3] stateful #-}
 
 
 ------------------------------------------------------------------------------
 -- | Like 'interpret', but with access to an intermediate state @s@.
 lazilyStateful
-    :: (∀ x m. e m x -> s -> Sem r (s, x))
+    :: forall e s r a
+     . (∀ x m. e m x -> s -> Sem r (s, x))
     -> s
     -> Sem (e ': r) a
     -> Sem r (s, a)
-lazilyStateful f = interpretInLazyStateT $ \e -> LS.StateT $ fmap S.swap . f e
+lazilyStateful f = go
+  where
+    go :: forall x. s -> Sem (e ': r) x -> Sem r (s, x)
+    go s0 sem0 = Sem $ \k c0 ->
+      runSem sem0
+        (\u c s -> case decomp u of
+            Left g -> (`k` (\(LazyT2 ~(s', x)) -> c x s')) $
+              weave
+                (LazyT2 (s, ()))
+                (\(LazyT2 ~(s', sem)) -> coerce $ go_ s' sem)
+                (runWeaveLazyState s)
+                g
+            Right wav -> fromFOEff wav $ \ex e ->
+              runSem (f e s) k (\ ~(s', x) -> c (ex x) s')
+        )
+        (\a s -> c0 (s, a))
+        s0
+    {-# INLINE go #-}
+
+    go_ :: forall x. s -> Sem (e ': r) x -> Sem r (s, x)
+    go_ = go
+    {-# NOINLINE go_ #-}
 {-# INLINE[3] lazilyStateful #-}
 
 ------------------------------------------------------------------------------
@@ -99,8 +136,8 @@ rewrite
 rewrite f (Sem m) = Sem $ \k -> m $ \u ->
   k $ hoist (rewrite f) $ case decompCoerce u of
     Left x -> x
-    Right (Weaving e mkT lwr ex) ->
-      Union Here $ Weaving (f e) mkT lwr ex
+    Right wav -> Union Here (rewriteWeaving f wav)
+      -- Union Here $ Weaving (f e) mkT lwr ex
 
 
 ------------------------------------------------------------------------------
@@ -109,16 +146,15 @@ rewrite f (Sem m) = Sem $ \k -> m $ \u ->
 --
 -- @since 1.2.3.0
 transform
-    :: forall e1 e2 r a
+    :: forall e2 e1 r a
      . Member e2 r
     => (forall z x. e1 z x -> e2 z x)
     -> Sem (e1 ': r) a
     -> Sem r a
 transform = transformUsing membership
-{-# INLINE transform #-}
 
 transformUsing
-    :: forall e1 e2 r a
+    :: forall e2 e1 r a
      . ElemOf e2 r
     -> (forall z x. e1 z x -> e2 z x)
     -> Sem (e1 ': r) a
@@ -126,5 +162,4 @@ transformUsing
 transformUsing pr f (Sem m) = Sem $ \k -> m $ \u ->
   k $ hoist (transformUsing pr f) $ case decomp u of
     Left g -> g
-    Right (Weaving e mkT lwr ex) ->
-      Union pr (Weaving (f e) mkT lwr ex)
+    Right wav -> Union pr $ rewriteWeaving f wav

@@ -29,6 +29,8 @@ module Polysemy.State
   , hoistStateIntoStateT
   ) where
 
+import Data.Tuple (swap)
+import Control.Monad ((<$!>))
 import Control.Monad.ST
 import qualified Control.Monad.Trans.State as S
 import Data.IORef
@@ -244,13 +246,7 @@ stateToST s sem = do
 hoistStateIntoStateT
     :: Sem (State s ': r) a
     -> S.StateT s (Sem r) a
-hoistStateIntoStateT (Sem m) = m $ \u ->
-  case decomp u of
-    Left x ->
-      liftHandlerWithNat hoistStateIntoStateT liftSem x
-    Right (Weaving Get _ lwr ex)     -> ex . (<$ mkInitState lwr) <$> S.get
-    Right (Weaving (Put s) _ lwr ex) -> ex . (<$ mkInitState lwr) <$> S.put s
-
+hoistStateIntoStateT m = S.StateT $ \s -> swap <$!> runState s m
 
 {-# RULES "runState/reinterpret"
    forall s e (f :: forall m x. e m x -> Sem (State s ': r) x).

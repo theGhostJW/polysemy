@@ -36,6 +36,7 @@ import           Polysemy
 import           Polysemy.Final
 import           Polysemy.Internal
 import           Polysemy.Internal.Union
+import           Polysemy.Internal.Core
 import           Unsafe.Coerce              (unsafeCoerce)
 
 
@@ -51,7 +52,13 @@ data Error e m a where
   -- given by the second argument.
   Catch :: ∀ e m a. m a -> (e -> m a) -> Error e m a
 
-makeSem ''Error
+--makeSem ''Error
+
+throw :: Member (Error e) r => e -> Sem r void
+throw = send . Throw
+
+catch :: Member (Error e) r => Sem r a -> (e -> Sem r a) -> Sem r a
+catch m h = send (Catch m h)
 
 
 ------------------------------------------------------------------------------
@@ -198,22 +205,56 @@ catchJust ef m bf = catch m handler
 runError
     :: Sem (Error e ': r) a
     -> Sem r (Either e a)
-runError (Sem m) = Sem $ \k -> E.runExceptT $ m $ \u ->
-  case decomp u of
-    Left x ->
-      liftHandlerWithNat (E.ExceptT . runError) k x
-    Right (Weaving (Throw e) _ _ _) -> E.throwE e
-    Right (Weaving (Catch main handle) mkT lwr ex) ->
-      E.ExceptT $ usingSem k $ do
-        ea <- runError $ lwr $ mkT id main
-        case ea of
-          Right a -> pure . Right $ ex a
-          Left e -> do
-            ma' <- runError $ lwr $ mkT id $ handle e
-            case ma' of
-              Left e' -> pure $ Left e'
-              Right a -> pure . Right $ ex a
+runError sem0 = Sem $ \k c0 ->
+  runSem sem0
+    (\u c -> case decomp u of
+        Left g -> (`k` either (c0 . Left) c) $
+          weave
+            (Right ())
+            (either (return . Left) go)
+            runWeaveError
+            g
+        Right (Sent e n) -> case e of
+          Throw exc -> c0 (Left exc)
+          Catch m h ->
+            let
+              m' = runSem (go (n m)) k
+              h' = usingSem (either (c0 . Left) c) k . go . n . h
+            in m' (either h' c)
+        Right (Weaved e _ mkS wv _ ex) -> case e of
+          Throw exc -> c0 (Left exc)
+          Catch m h ->
+            let
+              m' = runSem (go (wv (mkS m))) k
+              h' = usingSem (either (c0 . Left) (c . ex)) k . go . wv . mkS . h
+            in
+              m' (either h' (c . ex))
+    )
+    (c0 . Right)
+  where
+    go :: Sem (Error e ': r) a -> Sem r (Either e a)
+    go = runError
+    {-# NOINLINE go #-}
 
+runWeaveError :: Sem (Weave (Either e) ': r) a -> Sem r (Either e a)
+runWeaveError sem0 = Sem $ \k c0 ->
+  runSem sem0
+    (\u c -> case decomp u of
+        Left g -> (`k` either (c0 . Left) c) $
+          weave
+            (Right ())
+            (either (return . Left) runWeaveError)
+            runWeaveError
+            g
+        Right wav -> fromFOEff wav $ \ex -> \case
+          RestoreW t -> either (c0 . Left) (c . ex) t
+          GetStateW main -> c $ ex $ main Right
+          LiftWithW main -> c $ ex $ main runWeaveError
+    )
+    (c0 . Right)
+
+
+-- TODO: Remove mapError! It's bad!
 ------------------------------------------------------------------------------
 -- | Transform one 'Error' into another. This function can be used to aggregate
 -- multiple errors into a single type.

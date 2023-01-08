@@ -26,7 +26,6 @@ module Polysemy.Writer
   ) where
 
 import Control.Concurrent.STM
-import qualified Control.Monad.Trans.Writer.Lazy as Lazy
 
 import Data.Bifunctor (first)
 import Data.Semigroup
@@ -38,6 +37,10 @@ import Polysemy.HigherOrder
 
 import Polysemy.Internal.Union
 import Polysemy.Internal.Writer
+import Polysemy.Internal.Core
+import Polysemy.Internal.Utils
+import Data.Functor.Identity
+import Data.Functor.Const
 
 
 
@@ -99,19 +102,25 @@ runLazyWriter
      . Monoid o
     => Sem (Writer o ': r) a
     -> Sem r (o, a)
-runLazyWriter = interpretViaLazyWriter $ \(Weaving e mkT lwr ex) ->
-  case e of
-    Tell o   -> ex (mkInitState lwr) <$ Lazy.tell o
+runLazyWriter = interpretViaLazyWriter $ \case
+  Sent e n -> case e of
+    Tell o -> return (o, ())
     Listen m -> do
-      let m' = lwr $ mkT id m
-      ~(fa, o) <- Lazy.listen m'
-      return $ ex $ (,) o <$> fa
+      ~(o, a) <- runLazyWriter (n m)
+      return (o, (o, a))
     Pass m -> do
-      let m' = lwr $ mkT id m
-      Lazy.pass $ do
-        ft <- m'
-        let f = foldr (const . fst) id ft
-        return (ex $ snd <$> ft, f)
+      ~(o, ~(f, a)) <- runLazyWriter (n m)
+      return (f o, a)
+  Weaved e (Traversal trav) mkS wv _ ex -> case e of
+    Tell o -> return (o, ex (mkS ()))
+    Listen m -> do
+      ~(o, ta) <- runLazyWriter (wv (mkS m))
+      return (o, ex $ runIdentity $ trav (Identity #. (,) o) ta)
+    Pass m -> do
+      ~(o, tfa) <- runLazyWriter (wv (mkS m))
+      let
+        f = appEndo (getConst (trav (\a -> Const $ Endo $ \_ -> fst a) tfa)) id
+      return (f o, ex $ runIdentity $ trav (Identity #. snd) tfa)
 
 -----------------------------------------------------------------------------
 -- | Like 'runWriter', but right-associates uses of '<>'.

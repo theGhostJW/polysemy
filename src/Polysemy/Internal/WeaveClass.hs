@@ -4,7 +4,7 @@ module Polysemy.Internal.WeaveClass
   ( MonadTransWeave(..)
   , mkInitState
   , ComposeT(..)
-  , WeaveFreeT(..)
+  , LazyT2(..)
   ) where
 
 import Control.Monad
@@ -18,29 +18,10 @@ import qualified Control.Monad.Trans.Writer.Lazy as LWr
 import Data.Functor.Compose
 import Data.Functor.Identity
 import Data.Tuple
+import Data.Foldable
+import Data.Traversable
+import Polysemy.Internal.Utils
 import Data.Kind (Type)
-
--- The (co)Free MonadTransWeave for a (Traversable t)
-newtype WeaveFreeT t m a = WeaveFreeT { unWeaveFreeT :: forall u. MonadTransWeave u => (forall x. t x -> StT u x) -> (forall x. StT u x -> t x) -> u m a }
-
-instance Monad m => Functor (WeaveFreeT t m) where
-  fmap = liftM
-
-instance Monad m => Applicative (WeaveFreeT t m) where
-  pure a = WeaveFreeT $ \_ _ -> pure a
-  (<*>) = ap
-
-instance Monad m => Monad (WeaveFreeT t m) where
-  m >>= f = WeaveFreeT $ \to from -> unWeaveFreeT m to from >>= \a -> unWeaveFreeT (f a) to from
-
-instance MonadTrans (WeaveFreeT t) where
-  lift m = WeaveFreeT $ \_ _ -> lift m
-
--- For extra hilarity, we can instead use the cofree traversable of t
-instance Traversable t => MonadTransWeave (WeaveFreeT t) where
-  type StT (WeaveFreeT t) = t
-  restoreT main = WeaveFreeT $ \to _ -> restoreT (fmap to main)
-  liftWith main = WeaveFreeT $ \to from -> liftWith $ \lwr -> main $ \tm -> from <$> lwr (unWeaveFreeT tm to from)
 
 -- | A variant of the classic @MonadTransControl@ class from @monad-control@,
 -- but with a small number of changes to make it more suitable for Polysemy's
@@ -119,18 +100,19 @@ instance MonadTransWeave IdentityT where
   restoreT = IdentityT . fmap runIdentity
 
 instance MonadTransWeave (LSt.StateT s) where
-  type StT (LSt.StateT s) = (,) s
+  type StT (LSt.StateT s) = LazyT2 s
 
   hoistT nt = LSt.mapStateT nt
 
   controlT main = LSt.StateT $ \s ->
-    swap <$> main (\m -> swap <$> LSt.runStateT m s)
+    (\(LazyT2 ~(s, a)) -> (a, s))
+    <$> main (\m -> (\ ~(a, s) -> LazyT2 (s, a)) <$> LSt.runStateT m s)
 
   liftWith main = LSt.StateT $ \s ->
         (, s)
-    <$> main (\m -> swap <$> LSt.runStateT m s)
+    <$> main (\m -> (\ ~(a, s) -> LazyT2 (s, a)) <$> LSt.runStateT m s)
 
-  restoreT m = LSt.StateT $ \_ -> swap <$> m
+  restoreT m = LSt.StateT $ \_ -> (\(LazyT2 ~(s, a)) -> (a, s)) <$> m
 
 instance MonadTransWeave (SSt.StateT s) where
   type StT (SSt.StateT s) = (,) s
@@ -158,15 +140,17 @@ instance MonadTransWeave (E.ExceptT e) where
   restoreT = E.ExceptT
 
 instance Monoid w => MonadTransWeave (LWr.WriterT w) where
-  type StT (LWr.WriterT w) = (,) w
+  type StT (LWr.WriterT w) = LazyT2 w
 
   hoistT nt = LWr.mapWriterT nt
 
-  controlT main = LWr.WriterT (swap <$> main (fmap swap . LWr.runWriterT))
+  controlT main = LWr.WriterT $
+    (\(LazyT2 ~(s, a)) -> (a, s))
+    <$> main (fmap (\ ~(a, s) -> LazyT2 (s, a)) . LWr.runWriterT)
 
-  liftWith main = lift $ main (fmap swap . LWr.runWriterT)
+  liftWith main = lift $ main (fmap (\ ~(a, s) -> LazyT2 (s, a)) . LWr.runWriterT)
 
-  restoreT m = LWr.WriterT (swap <$> m)
+  restoreT m = LWr.WriterT ((\(LazyT2 ~(s, a)) -> (a, s)) <$> m)
 
 
 instance MonadTransWeave MaybeT where
@@ -179,3 +163,18 @@ instance MonadTransWeave MaybeT where
   liftWith main = lift $ main runMaybeT
 
   restoreT = MaybeT
+
+newtype LazyT2 s a = LazyT2 { getLazyT2 :: (s, a) }
+
+instance Functor (LazyT2 s) where
+  fmap f (LazyT2 ~(s, a)) = LazyT2 (s, f a)
+  a <$ (LazyT2 ~(s, _)) = LazyT2 (s, a)
+
+instance Foldable (LazyT2 s) where
+  length _ = 1
+  foldr c b (LazyT2 ~(_, a)) = c a b
+  foldMap f (LazyT2 ~(_, a)) = f a
+  toList (LazyT2 ~(_, a)) = [a]
+
+instance Traversable (LazyT2 s) where
+  traverse f (LazyT2 ~(s, a)) = (LazyT2 #. (,) s) <$> f a

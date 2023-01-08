@@ -5,7 +5,7 @@ module Polysemy.Internal.Final
     Final(..)
 
     -- * Actions
-  , withTransToFinal
+  , withWeavingToFinal
   , controlFinal
   , withLoweringToFinal
   , embedFinal
@@ -57,11 +57,14 @@ module Polysemy.Internal.Final
 
 import Data.Functor.Identity
 import Data.Kind
-import Control.Monad.Trans
 import Polysemy.Internal
 import Polysemy.Internal.Union
 import Polysemy.Internal.Combinators
+import Polysemy.Internal.HigherOrder
 import Polysemy.Internal.TH.Effect
+import Polysemy.Internal.Core
+import Polysemy.Internal.Utils
+import Polysemy.Internal.Reflection
 
 -----------------------------------------------------------------------------
 -- | An effect for embedding higher-order actions in the final target monad
@@ -95,11 +98,29 @@ import Polysemy.Internal.TH.Effect
 --
 -- @since 1.2.0.0
 newtype Final m z a where
-  WithTransToFinal
-    :: (forall t. MonadTransWeave t => (forall x. z x -> t m x) -> t m a)
-    -> Final m z a
+  WithWeavingToFinal
+    :: (forall t. WeavingInfo t z m -> m (t a)) -> Final m z a
 
-makeSem ''Final
+data WeavingInfo t z m where
+  Untransformed :: (forall x. z x -> m x) -> WeavingInfo Identity z m
+  Transformed :: Traversal t
+              -> (forall x. x -> t x)
+              -> (forall x. t (z x) -> m (t x))
+              -> (forall r x. Sem (Weave t ': r) x -> Sem r (t x))
+              -> WeavingInfo t z m
+
+mapWeavingInfo
+  :: (forall x. n x -> m x) -> WeavingInfo t z n -> WeavingInfo t z m
+mapWeavingInfo to = \case
+  Untransformed n -> Untransformed (to . n)
+  Transformed trav mkS wv lwr -> Transformed trav mkS (to . wv) lwr
+
+-- makeSem ''Final
+
+withWeavingToFinal :: Member (Final m) r
+                   => (forall t. WeavingInfo t (Sem r) m -> m (t a))
+                   -> Sem r a
+withWeavingToFinal main = send (WithWeavingToFinal main)
 
 -- | The 'Lowering' environment, which is a 'Polysemy.Sem' with a small
 -- effect stack containing the @'Lower' m t n@ effect, which provides the
@@ -126,7 +147,7 @@ data Lower m t n z a where
                   . ((forall x. n x -> m (t x)) -> m a)
                  -> Lower m t n z a
   RestoreL  :: forall m t n z a. t a -> Lower m t n z a
-  RunL      :: forall m t n z a. n a -> Lower m t n z a
+  -- RunL      :: forall m t n z a. n a -> Lower m t n z a
 
 -- | A singleton datatype parametrized with type parameters corresponding to
 -- @HigherOrder@
@@ -148,7 +169,7 @@ getTypeParamsL = return TypeParamsL
 --
 -- @since 2.0.0.0
 runL :: forall m t n r a. n a -> Sem (Lower m t n ': r) a
-runL = send . RunL @m @t
+runL m = controlWithProcessorL $ \lwr -> lwr m
 
 -- | Lift an computation of the final monad @m@ by giving it access to a
 -- lowering function that can transform @'Lowering' m t n x@ to @m (t x)@.
@@ -322,30 +343,69 @@ controlFinal :: forall m r a
                 => (forall x. Sem r x -> m (t x)) -> m (t a)
                 )
              -> Sem r a
-controlFinal main = withTransToFinal $ \n ->
-  controlT $ \lower -> main (lower . n)
+controlFinal main = withWeavingToFinal @m \case
+  Untransformed n -> main (fmap Identity . n)
+  Transformed trav mkS wv _ -> reify trav \(_ :: pr s) ->
+    getViaTraversal <$> main (fmap (ViaTraversal @s) . wv . mkS)
 
-runLowering :: forall m n t a
-             . (Monad m, MonadTransWeave t)
-            => Lowering m (StT t) n a
-            -> (forall x. n x -> t m x) -> t m a
-runLowering main nat =
-  let
-    go :: forall x. Lowering m (StT t) n x -> t m x
-    go = usingSem $ \(Union pr (Weaving eff mkT lwr ex)) -> do
-      let run_it = (ex . (<$ mkInitState lwr))
-      case pr of
-        Here -> run_it <$> case eff of
-          RestoreL t -> restoreT (return t)
-          RunL m -> nat m
-          LiftWithL main' -> liftWith $ \lower -> main' (lower . go)
-          WithProcessorL main' -> liftWith $ \lower -> main' (lower . nat)
-        There Here | Embed m <- eff -> run_it <$> lift m
-        There (There Here) | WithTransToFinal main' <- eff ->
-          fmap ex $ lwr $ getComposeT $ main' (ComposeT . mkT go)
-        There (There (There pr_)) -> case pr_ of {}
-  in
-    go main
+
+
+runLowering :: forall m n a
+             . Monad m
+            => (forall t. Traversable t => Lowering m t n a)
+            -> (forall t. WeavingInfo t n m -> m (t a))
+runLowering lowering = \case
+  Untransformed to ->
+    let
+      go :: forall x. Lowering m Identity n x -> m x
+      go = usingSem return \(Union pr wav) c -> case pr of
+        Here -> fromFOEff wav $ \ex -> \case
+          RestoreL (Identity a) -> c (ex a)
+          LiftWithL main' -> main' (fmap Identity . go) >>= c . ex
+          WithProcessorL main' -> main' (fmap Identity . to) >>= c . ex
+        There Here -> fromFOEff wav $ \ex (Embed m) -> m >>= c . ex
+        There (There Here) -> case wav of
+          Sent (WithWeavingToFinal main) to' ->
+            main (Untransformed (go . to')) >>= c .# runIdentity
+          Weaved (WithWeavingToFinal main) trav mkS wv lwr ex ->
+            main (Transformed trav mkS (go . wv) lwr) >>= c . ex
+        There (There (There pr')) -> absurdMembership pr'
+
+    in
+      go (Identity <$> lowering)
+  Transformed (trav :: Traversal t) _ wv lwr0 -> reify trav \(_ :: pr s) ->
+    let
+      go :: forall x
+          . Lowering m (ViaTraversal s t) n x
+         -> Sem '[Weave t, Embed m, Final m] x
+      go = reinterpret \case
+        RestoreL (ViaTraversal t) -> send (RestoreW t)
+        LiftWithL main ->
+          send (LiftWithW (\lwr -> main (fmap ViaTraversal . runM . lwr . go)))
+          >>= embed
+        WithProcessorL main ->
+          send (GetStateW (\mkS -> main (fmap ViaTraversal . wv . mkS)))
+          >>= embed
+    in
+      runM $ lwr0 $ go lowering
+
+-- runLowering main nat =
+--   let
+--     go :: forall x. Lowering m (StT t) n x -> t m x
+--     go = usingSem $ \(Union pr (Weaving eff mkT lwr ex)) -> do
+--       let run_it = (ex . (<$ mkInitState lwr))
+--       case pr of
+--         Here -> run_it <$> case eff of
+--           RestoreL t -> restoreT (return t)
+--           RunL m -> nat m
+--           LiftWithL main' -> liftWith $ \lower -> main' (lower . go)
+--           WithProcessorL main' -> liftWith $ \lower -> main' (lower . nat)
+--         There Here | Embed m <- eff -> run_it <$> lift m
+--         There (There Here) | WithTransToFinal main' <- eff ->
+--           fmap ex $ lwr $ getComposeT $ main' (ComposeT . mkT go)
+--         There (There (There pr_)) -> case pr_ of {}
+--   in
+--     go main
 
 -----------------------------------------------------------------------------
 -- | Allows for embedding higher-order actions of the final monad
@@ -361,17 +421,19 @@ runLowering main nat =
 withLoweringToFinal :: (Monad m, Member (Final m) r)
                      => (forall t. Traversable t => Lowering m t (Sem r) a)
                      -> Sem r a
-withLoweringToFinal main = withTransToFinal (runLowering main)
+withLoweringToFinal main = withWeavingToFinal (runLowering main)
 
 ------------------------------------------------------------------------------
 -- | Lower a 'Sem' containing only a single lifted 'Monad' into that
 -- monad.
 runM :: Monad m => Sem '[Embed m, Final m] a -> m a
-runM = usingSem $ \u -> case decomp u of
-  Right (Weaving (Embed m) _ lwr ex) -> fmap (ex . (<$ mkInitState lwr)) m
+runM = usingSem return $ \u c -> case decomp u of
+  Right wav -> fromFOEff wav $ \ex (Embed m) -> m >>= c . ex
   Left g -> case extract g of
-    Weaving (WithTransToFinal main) mkT lwr ex ->
-      fmap ex $ lwr $ main $ mkT runM
+    Sent (WithWeavingToFinal main) n ->
+      main (Untransformed (runM . n)) >>= c .# runIdentity
+    Weaved (WithWeavingToFinal main) trav mkS wv lwr ex ->
+      main (Transformed trav mkS (runM . wv) lwr) >>= c . ex
 {-# NOINLINE[3] runM #-}
 {-# SPECIALIZE[~3] runM :: Sem '[Embed IO, Final IO] a -> IO a #-}
 {-# SPECIALIZE[~3] runM :: Sem '[Embed Identity, Final Identity] a -> Identity a #-}
@@ -383,8 +445,11 @@ runM = usingSem $ \u -> case decomp u of
 -- Just like 'embed', you are discouraged from using this in application code.
 --
 -- @since 1.2.0.0
-embedFinal :: (Member (Final m) r, Monad m) => m a -> Sem r a
-embedFinal m = withTransToFinal $ \_ -> lift m
+embedFinal :: (Member (Final m) r, Functor m) => m a -> Sem r a
+embedFinal m = withWeavingToFinal $ \case
+  Untransformed _ -> Identity <$> m
+  Transformed _ mkS _ _ -> mkS <$> m
+
 
 ------------------------------------------------------------------------------
 -- | Like 'interpretH', but may be used to
@@ -415,51 +480,29 @@ interpretFinal
     -> Sem (e ': r) a
     -> Sem r a
 interpretFinal h =
-  let
-    go :: Sem (e ': r) x -> Sem r x
-    go = hoistSem $ \u -> case decomp u of
-      Right (Weaving e mkT lwr ex) ->
-        injWeaving $
-          Weaving
-            (WithTransToFinal (runLowering (h e)))
-            (\n -> mkT (n . go))
-            lwr
-            ex
-      Left g -> hoist go g
-  in
-    go
+  transform @(Final m) (\e -> WithWeavingToFinal (runLowering (h e)))
 
 ------------------------------------------------------------------------------
 -- | Given natural transformations between @m1@ and @m2@, run a @'Final' m1@
 -- effect by transforming it into a @'Final' m2@ effect.
 --
 -- @since 1.2.0.0
-finalToFinal :: forall m1 m2 r a
+finalToFinal :: forall m2 m1 r a
               . (Monad m1, Monad m2, Member (Final m2) r)
              => (forall x. m1 x -> m2 x)
              -> (forall x. m2 x -> m1 x)
              -> Sem (Final m1 ': r) a
              -> Sem r a
-finalToFinal to from =
-  let
-    go :: Sem (Final m1 ': r) x -> Sem r x
-    go = hoistSem $ \u -> case decomp u of
-      Right (Weaving (WithTransToFinal main) mkT lwr ex) ->
-        injWeaving $
-          Weaving
-            (WithTransToFinal $ \n -> hoistT to $ main (hoistT from . n))
-            (\n -> mkT (n . go))
-            lwr
-            ex
-      Left g -> hoist go g
-  in
-    go
+finalToFinal to from = transform @(Final m2) $ \(WithWeavingToFinal main) ->
+  WithWeavingToFinal (to . main . mapWeavingInfo from)
 
 ------------------------------------------------------------------------------
 -- | Transform an @'Embed' m@ effect into a @'Final' m@ effect
 --
 -- @since 1.2.0.0
-embedToFinal :: (Member (Final m) r, Monad m)
+embedToFinal :: (Member (Final m) r, Functor m)
              => Sem (Embed m ': r) a
              -> Sem r a
-embedToFinal = transform $ \(Embed m) -> WithTransToFinal $ \_ -> lift m
+embedToFinal = transform $ \(Embed m) -> WithWeavingToFinal $ \case
+  Untransformed _ -> Identity <$> m
+  Transformed _ mkS _ _ -> mkS <$> m

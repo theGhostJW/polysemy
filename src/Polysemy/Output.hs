@@ -108,9 +108,8 @@ runLazyOutputMonoid
     => (o -> m)
     -> Sem (Output o ': r) a
     -> Sem r (m, a)
-runLazyOutputMonoid f = interpretViaLazyWriter $ \(Weaving e _ lwr ex) ->
-  case e of
-    Output o -> fmap ex $ lwr $ lift $ Lazy.tell (f o)
+runLazyOutputMonoid f = interpretViaLazyWriter $ \wav ->
+  fromFOEff wav $ \ex (Output o) -> return (f o, ex ())
 
 ------------------------------------------------------------------------------
 -- | Like 'runOutputMonoid', but right-associates uses of '<>'.

@@ -152,11 +152,7 @@ noteFatal _ (Just a) = pure a
 runFatal
     :: Sem (Fatal e ': r) a
     -> Sem r (Either e a)
-runFatal (Sem m) = Sem $ \k -> E.runExceptT $ m $ \u ->
-  case decomp u of
-    Left x ->
-      liftHandlerWithNat (E.ExceptT . runFatal) k x
-    Right (Weaving (Fatal e) _ _ _) -> E.throwE e
+runFatal = runError . rewrite (\(Fatal e) -> Throw e)
 
 
 ------------------------------------------------------------------------------

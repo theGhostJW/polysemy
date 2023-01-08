@@ -5,9 +5,6 @@ module Polysemy.HigherOrder
   , higherOrderIntoOpaque
   , higherOrderFromOpaque
 
-    -- * Ultrageneric 'interpretH'
-  , genericInterpretH
-
     -- * Running higher-order chunks
   , runH
   , runH'

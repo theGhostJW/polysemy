@@ -44,185 +44,18 @@ module Polysemy.Internal
   , Append
   , InterpreterFor
   , InterpretersFor
+  , interpretFast
   ) where
 
-import Control.Applicative
-import Control.Monad
-#if __GLASGOW_HASKELL__ < 808
-
-
-import Control.Monad.Fail
-#endif
-import Control.Monad.Fix
-import Control.Monad.IO.Class
-import Data.Functor.Identity
 import Data.Kind
 import Data.Type.Equality
 import Polysemy.Embed.Type
-import Polysemy.Fail.Type
-import Polysemy.Internal.Fixpoint
 import Polysemy.Internal.Index (InsertAtIndex(insertAtIndex))
 import Polysemy.Internal.Kind
-import Polysemy.Internal.NonDet
 import Polysemy.Internal.PluginLookup
 import Polysemy.Internal.Union
 import Polysemy.Internal.Sing
-
-
--- $setup
--- >>> import Data.Function
--- >>> import Polysemy.State
--- >>> import Polysemy.Error
-
-------------------------------------------------------------------------------
--- | The 'Sem' monad handles computations of arbitrary extensible effects.
--- A value of type @Sem r@ describes a program with the capabilities of
--- @r@. For best results, @r@ should always be kept polymorphic, but you can
--- add capabilities via the 'Member' constraint.
---
--- The value of the 'Sem' monad is that it allows you to write programs
--- against a set of effects without a predefined meaning, and provide that
--- meaning later. For example, unlike with mtl, you can decide to interpret an
--- 'Polysemy.Error.Error' effect traditionally as an 'Either', or instead
--- as (a significantly faster) 'IO' 'Control.Exception.Exception'. These
--- interpretations (and others that you might add) may be used interchangeably
--- without needing to write any newtypes or 'Monad' instances. The only
--- change needed to swap interpretations is to change a call from
--- 'Polysemy.Error.runError' to 'Polysemy.Error.errorToIOFinal'.
---
--- The effect stack @r@ can contain arbitrary other monads inside of it. These
--- monads are lifted into effects via the 'Embed' effect. Monadic values can be
--- lifted into a 'Sem' via 'embed'.
---
--- Higher-order actions of another monad can be lifted into higher-order actions
--- of 'Sem' via the 'Polysemy.Final' effect, which is more powerful
--- than 'Embed', but also less flexible to interpret.
---
--- A 'Sem' can be interpreted as a pure value (via 'run') or as any
--- traditional 'Monad' (via 'Polysemy.runM').
--- Each effect @E@ comes equipped with some interpreters of the form:
---
--- @
--- runE :: 'Sem' (E ': r) a -> 'Sem' r a
--- @
---
--- which is responsible for removing the effect @E@ from the effect stack. It
--- is the order in which you call the interpreters that determines the
--- monomorphic representation of the @r@ parameter.
---
--- Order of interpreters can be important - it determines behaviour of effects
--- that manipulate state or change control flow. For example, when
--- interpreting this action:
---
--- >>> :{
---   example :: Members '[State String, Error String] r => Sem r String
---   example = do
---     put "start"
---     let throwing, catching :: Members '[State String, Error String] r => Sem r String
---         throwing = do
---           modify (++"-throw")
---           throw "error"
---           get
---         catching = do
---           modify (++"-catch")
---           get
---     catch @String throwing (\ _ -> catching)
--- :}
---
--- when handling 'Polysemy.Error.Error' first, state is preserved after error
--- occurs:
---
--- >>> :{
---   example
---     & runError
---     & fmap (either id id)
---     & evalState ""
---     & runM
---     & (print =<<)
--- :}
--- "start-throw-catch"
---
--- while handling 'Polysemy.State.State' first discards state in such cases:
---
--- >>> :{
---   example
---     & evalState ""
---     & runError
---     & fmap (either id id)
---     & runM
---     & (print =<<)
--- :}
--- "start-catch"
---
--- A good rule of thumb is to handle effects which should have \"global\"
--- behaviour over other effects later in the chain.
---
--- After all of your effects are handled, you'll be left with either
--- a @'Sem' '[] a@, a @'Sem' '[ 'Embed' m ] a@, or a @'Sem' '[ 'Polysemy.Final' m ] a@
--- value, which can be consumed respectively by 'run', 'runM', and
--- 'Polysemy.runFinal'.
---
--- ==== Examples
---
--- As an example of keeping @r@ polymorphic, we can consider the type
---
--- @
--- 'Member' ('Polysemy.State.State' String) r => 'Sem' r ()
--- @
---
--- to be a program with access to
---
--- @
--- 'Polysemy.State.get' :: 'Sem' r String
--- 'Polysemy.State.put' :: String -> 'Sem' r ()
--- @
---
--- methods.
---
--- By also adding a
---
--- @
--- 'Member' ('Polysemy.Error' Bool) r
--- @
---
--- constraint on @r@, we gain access to the
---
--- @
--- 'Polysemy.Error.throw' :: Bool -> 'Sem' r a
--- 'Polysemy.Error.catch' :: 'Sem' r a -> (Bool -> 'Sem' r a) -> 'Sem' r a
--- @
---
--- functions as well.
---
--- In this sense, a @'Member' ('Polysemy.State.State' s) r@ constraint is
--- analogous to mtl's @'Control.Monad.State.Class.MonadState' s m@ and should
--- be thought of as such. However, /unlike/ mtl, a 'Sem' monad may have
--- an arbitrary number of the same effect.
---
--- For example, we can write a 'Sem' program which can output either
--- 'Int's or 'Bool's:
---
--- @
--- foo :: ( 'Member' ('Polysemy.Output.Output' Int) r
---        , 'Member' ('Polysemy.Output.Output' Bool) r
---        )
---     => 'Sem' r ()
--- foo = do
---   'Polysemy.Output.output' @Int  5
---   'Polysemy.Output.output' True
--- @
---
--- Notice that we must use @-XTypeApplications@ to specify that we'd like to
--- use the ('Polysemy.Output.Output' 'Int') effect.
---
--- @since 0.1.2.0
-newtype Sem r a = Sem
-  { runSem
-        :: ∀ m
-         . Monad m
-        => (∀ x. Union r (Sem r) x -> m x)
-        -> m a
-  }
+import Polysemy.Internal.Core
 
 
 ------------------------------------------------------------------------------
@@ -258,100 +91,6 @@ instance PluginLookup Plugin
 type family Members es r :: Constraint where
   Members '[]       r = ()
   Members (e ': es) r = (Member e r, Members es r)
-
-
-------------------------------------------------------------------------------
--- | Like 'runSem' but flipped for better ergonomics sometimes.
-usingSem
-    :: Monad m
-    => (∀ x. Union r (Sem r) x -> m x)
-    -> Sem r a
-    -> m a
-usingSem k m = runSem m k
-{-# INLINE usingSem #-}
-
-
-instance Functor (Sem f) where
-  fmap f (Sem m) = Sem $ \k -> f <$> m k
-  -- {-# INLINE fmap #-}
-
-
-instance Applicative (Sem f) where
-  pure a = Sem $ \_ -> pure a
-  -- {-# INLINE pure #-}
-
-  Sem f <*> Sem a = Sem $ \k -> f k <*> a k
-  -- {-# INLINE (<*>) #-}
-
-  liftA2 f ma mb = Sem $ \k -> liftA2 f (runSem ma k) (runSem mb k)
-  -- {-# INLINE liftA2 #-}
-
-  ma <* mb = Sem $ \k -> runSem ma k <* runSem mb k
-  -- {-# INLINE (<*) #-}
-
-  -- Use (>>=) because many monads are bad at optimizing (*>).
-  -- Ref https://github.com/polysemy-research/polysemy/issues/368
-  ma *> mb = Sem $ \k -> runSem ma k >>= \_ -> runSem mb k
-  -- {-# INLINE (*>) #-}
-
-instance Monad (Sem f) where
-  Sem ma >>= f = Sem $ \k -> do
-    z <- ma k
-    runSem (f z) k
-  -- {-# INLINE (>>=) #-}
-
-
-instance (Member NonDet r) => Alternative (Sem r) where
-  empty = send Empty
-  -- {-# INLINE empty #-}
-  a <|> b = send (Choose a b)
-  -- {-# INLINE (<|>) #-}
-
--- | @since 0.2.1.0
-instance (Member NonDet r) => MonadPlus (Sem r) where
-  mzero = empty
-  mplus = (<|>)
-
--- | @since 1.1.0.0
-instance (Member Fail r) => MonadFail (Sem r) where
-  fail = send . Fail
-  -- {-# INLINE fail #-}
-
--- | @since 1.6.0.0
-instance Semigroup a => Semigroup (Sem f a) where
-  (<>) = liftA2 (<>)
-
--- | @since 1.6.0.0
-instance Monoid a => Monoid (Sem f a) where
-  mempty = pure mempty
-
-------------------------------------------------------------------------------
--- | This instance will only lift 'IO' actions. If you want to lift into some
--- other 'MonadIO' type, use this instance, and handle it via the
--- 'Polysemy.IO.embedToMonadIO' interpretation.
-instance Member (Embed IO) r => MonadIO (Sem r) where
-  liftIO = embed
-  {-# INLINE liftIO #-}
-
-instance Member Fixpoint r => MonadFix (Sem r) where
-  mfix f = send $ Fixpoint f
-  -- {-# INLINE mfix #-}
-
-
-------------------------------------------------------------------------------
--- | Create a 'Sem' from a 'Union' with matching stacks.
-liftSem :: Union r (Sem r) a -> Sem r a
-liftSem u = Sem $ \k -> k u
-{-# INLINE liftSem #-}
-
-------------------------------------------------------------------------------
--- | Extend the stack of a 'Sem' with an explicit 'Union' transformation.
-hoistSem
-    :: (∀ x. Union r (Sem r) x -> Union r' (Sem r') x)
-    -> Sem r a
-    -> Sem r' a
-hoistSem nat (Sem m) = Sem $ \k -> m $ \u -> k $ nat u
-{-# INLINE hoistSem #-}
 
 ------------------------------------------------------------------------------
 -- | Rewrite the effect stack of a 'Sem' using with an explicit membership proof
@@ -669,72 +408,12 @@ exposeUsing pr = mapMembership \pr' ->
     _         -> There pr'
 {-# INLINE exposeUsing #-}
 
-------------------------------------------------------------------------------
--- | Execute an action of an effect.
---
--- This is primarily used to create methods for actions of effects:
---
--- @
--- data FooBar m a where
---   Foo :: String -> m a -> FooBar m a
---   Bar :: FooBar m Int
---
--- foo :: Member FooBar r => String -> Sem r a -> Sem r a
--- foo s m = send (Foo s m)
---
--- bar :: Member FooBar r => Sem r Int
--- bar = send Bar
--- @
---
--- 'Polysemy.makeSem' allows you to eliminate this boilerplate.
-send :: Member e r => e (Sem r) a -> Sem r a
-send = liftSem . inj
-{-# NOINLINE[3] send #-}
-
-------------------------------------------------------------------------------
--- | Execute an action of an effect, given a natural transformation from
--- the monad used for the higher-order chunks in the effect to
--- @'Polysemy.Sem' r@.
---
--- @since 2.0.0.0
-sendVia :: forall e z r a
-         . Member e r
-        => (forall x. z x -> Sem r x)
-        -> e z a -> Sem r a
-sendVia n = liftSem . hoist n . inj
-{-# NOINLINE[3] sendVia #-}
-
-------------------------------------------------------------------------------
--- | Embed an effect into a 'Sem', given an explicit proof
--- that the effect exists in @r@.
---
--- This is useful in conjunction with 'Polysemy.Membership.tryMembership',
--- in order to conditionally make use of effects.
-sendUsing :: ElemOf e r -> e (Sem r) a -> Sem r a
-sendUsing pr = liftSem . injUsing pr
-{-# NOINLINE[3] sendUsing #-}
-
-------------------------------------------------------------------------------
--- | Embed an effect into a 'Sem', given an explicit proof
--- that the effect exists in @r@, and a natural transformation from the monad
--- used for the higher-order thunks in the effect to @'Polysemy.Sem' r@.
-sendViaUsing :: ElemOf e r -> (forall x. z x -> Sem r x) -> e z a -> Sem r a
-sendViaUsing pr n = liftSem . hoist n . injUsing pr
-{-# NOINLINE[3] sendViaUsing #-}
-
-
-------------------------------------------------------------------------------
--- | Embed a monadic action @m@ in 'Sem'.
---
--- @since 1.0.0.0
-embed :: Member (Embed m) r => m a -> Sem r a
-embed = send . Embed
 
 
 ------------------------------------------------------------------------------
 -- | Run a 'Sem' containing no effects as a pure value.
 run :: Sem '[] a -> a
-run (Sem m) = runIdentity $ m absurdU
+run (Sem m) = m absurdU id
 {-# INLINE run #-}
 
 
@@ -771,3 +450,17 @@ floatAbove = mapMembership \pr ->
     Right Here -> Here
     Right (There pr') ->
       There (extendMembershipLeft @r (singList @l) pr')
+
+interpretFast :: forall e r. (∀ z x. e z x -> Sem r x) -> InterpreterFor e r
+interpretFast h = go
+  where
+    go :: InterpreterFor e r
+    go sem = Sem $ \k -> runSem sem $ \u c -> case decomp u of
+      Left g -> k (hoist go_ g) c
+      Right wav -> fromFOEff wav $ \ex e -> runSem (h e) k (c . ex)
+    {-# INLINE go #-}
+
+    go_ :: InterpreterFor e r
+    go_ = go
+    {-# NOINLINE go_ #-}
+{-# INLINE interpretFast #-}

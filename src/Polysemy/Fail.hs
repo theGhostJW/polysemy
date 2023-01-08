@@ -47,7 +47,7 @@ failToFatal :: forall e r a
             => (String -> e)
             -> Sem (Fail ': r) a
             -> Sem r a
-failToFatal f = transform @_ @(Fatal e) (coerce f)
+failToFatal f = transform @(Fatal e) (coerce f)
 {-# INLINE failToError #-}
 
 

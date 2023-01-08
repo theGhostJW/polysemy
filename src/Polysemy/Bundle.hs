@@ -80,10 +80,10 @@ collectBundle :: forall l r a
               => Sem (Append l r) a
               -> Sem (Bundle l ': r) a
 collectBundle =
-  hoistSem \(Union pr wav@(Weaving act mkT lwr ex)) ->
+  hoistSem \(Union pr wav) ->
     hoist (collectBundle @l)
       case splitMembership @r (singList @l) pr of
-        Left pr' -> Union Here (Weaving (Bundle pr' act) mkT lwr ex)
+        Left pr' -> Union Here (rewriteWeaving (Bundle pr') wav)
         Right pr' -> Union (There pr') wav
 
 ------------------------------------------------------------------------------
@@ -104,8 +104,10 @@ runBundle
   => Sem (Bundle r' ': r) a
   -> Sem (Append r' r) a
 runBundle = hoistSem $ \u -> hoist runBundle $ case decomp u of
-  Right (Weaving (Bundle pr e) mkT lwr ex) ->
-    Union (extendMembershipRight @r' @r pr) $ Weaving e mkT lwr ex
+  Right (Sent (Bundle pr e) n) ->
+    Union (extendMembershipRight @r' @r pr) $ Sent e n
+  Right (Weaved (Bundle pr e) trav mkS wv lwr ex) ->
+    Union (extendMembershipRight @r' @r pr) $ Weaved e trav mkS wv lwr ex
   Left g -> weakenList @r' @r (singList @r') g
 
 ------------------------------------------------------------------------------
@@ -116,6 +118,8 @@ subsumeBundle
   => Sem (Bundle r' ': r) a
   -> Sem r a
 subsumeBundle = hoistSem $ \u -> hoist subsumeBundle $ case decomp u of
-  Right (Weaving (Bundle pr e) mkT lwr ex) ->
-    Union (simpleSubsumeMembership pr) (Weaving e mkT lwr ex)
+  Right (Sent (Bundle pr e) n) ->
+    Union (simpleSubsumeMembership pr) $ Sent e n
+  Right (Weaved (Bundle pr e) trav mkS wv lwr ex) ->
+    Union (simpleSubsumeMembership pr) $ Weaved e trav mkS wv lwr ex
   Left g -> g

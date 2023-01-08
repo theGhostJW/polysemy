@@ -54,6 +54,7 @@ library
       Polysemy.Internal
       Polysemy.Internal.Bundle
       Polysemy.Internal.Combinators
+      Polysemy.Internal.Core
       Polysemy.Internal.CustomErrors
       Polysemy.Internal.CustomErrors.Redefined
       Polysemy.Internal.Final
@@ -64,6 +65,7 @@ library
       Polysemy.Internal.Meta
       Polysemy.Internal.NonDet
       Polysemy.Internal.Opaque
+      Polysemy.Internal.Reflection
       Polysemy.Internal.Sing
       Polysemy.Internal.TH.Common
       Polysemy.Internal.TH.Effect

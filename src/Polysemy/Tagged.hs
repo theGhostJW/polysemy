@@ -48,7 +48,7 @@ tag
      . Member (Tagged k e) r
     => Sem (e ': r) a
     -> Sem r a
-tag = transform @e @(Tagged k e) coerce
+tag = transform @(Tagged k e) coerce
 
 
 ------------------------------------------------------------------------------

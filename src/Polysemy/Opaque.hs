@@ -19,6 +19,7 @@ import Polysemy.Bundle
 import Polysemy.Membership
 import Polysemy.Internal.Union
 import Polysemy.Internal.Opaque
+import Polysemy.Internal.Utils
 import Polysemy.Newtype
 
 -- | Wrap 'Opaque' around the top effect of the effect stack
@@ -56,7 +57,7 @@ collectOpaqueBundleAt
    . (ListOfLength "collectOpaqueBundleAt" n l, KnownList mid)
   => Sem (Append l (Append mid r)) a
   -> Sem (Append l (Opaque (Bundle mid) ': r)) a
-collectOpaqueBundleAt = hoistSem $ \(Union pr wav@(Weaving act mkT lwr ex)) ->
+collectOpaqueBundleAt = hoistSem $ \(Union pr wav) ->
   hoist (collectOpaqueBundleAt @n @mid @r @l)
     case splitMembership @(Append mid r) (singList @l) pr of
       Left pr' ->
@@ -67,7 +68,7 @@ collectOpaqueBundleAt = hoistSem $ \(Union pr wav@(Weaving act mkT lwr ex)) ->
         Left pr'' ->
           Union (extendMembershipLeft @(Opaque (Bundle mid) ': r)
                   (singList @l) Here)
-                (Weaving (Opaque (Bundle pr'' act)) mkT lwr ex)
+                (rewriteWeaving (Opaque #. Bundle pr'') wav)
         Right pr'' ->
           Union (extendMembershipLeft @(Opaque (Bundle mid) ': r)
                   (singList @l)
@@ -79,15 +80,19 @@ runOpaqueBundleAt
    . (ListOfLength "runOpaqueBundleAt" n l, KnownList mid)
   => Sem (Append l (Opaque (Bundle mid) ': r)) a
   -> Sem (Append l (Append mid r)) a
-runOpaqueBundleAt = hoistSem $ \(Union pr wav@(Weaving act mkT lwr ex)) ->
+runOpaqueBundleAt = hoistSem $ \(Union pr wav) ->
   hoist (runOpaqueBundleAt @n @mid @r @l)
     case splitMembership @(Opaque (Bundle mid) ': r) (singList @l) pr of
       Left pr' ->
         Union (extendMembershipRight @_ @(Append mid r) pr') wav
-      Right Here | Opaque (Bundle pr' act') <- act ->
-        Union (extendMembershipLeft (singList @l)
-                (extendMembershipRight @_ @r pr'))
-              (Weaving act' mkT lwr ex)
+      Right Here -> case wav of
+        Sent (Opaque (Bundle pr' act')) n ->
+          Union (extendMembershipLeft (singList @l)
+                   (extendMembershipRight @_ @r pr')) (Sent act' n)
+        Weaved (Opaque (Bundle pr' act')) trav mkS wv lwr ex ->
+          Union (extendMembershipLeft (singList @l)
+                   (extendMembershipRight @_ @r pr'))
+                (Weaved act' trav mkS wv lwr ex)
       Right (There pr') ->
         Union (extendMembershipLeft (singList @l)
                 (extendMembershipLeft (singList @mid) pr')) wav

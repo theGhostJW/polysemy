@@ -9,6 +9,7 @@ import Control.Exception
 import Control.Monad
 import qualified Control.Monad.Trans.Writer.Lazy as Lazy
 
+import Data.Bifunctor
 import Data.Tuple (swap)
 import Data.Semigroup
 
@@ -16,7 +17,10 @@ import Polysemy
 import Polysemy.Final
 
 import Polysemy.Internal
+import Polysemy.Internal.Combinators
 import Polysemy.Internal.Union
+import Polysemy.Internal.Core
+import Polysemy.Internal.Utils
 
 
 ------------------------------------------------------------------------------
@@ -29,7 +33,15 @@ data Writer o m a where
   -- | Run the given action and apply the function it returns to the log.
   Pass   :: m (o -> o, a) -> Writer o m a
 
-makeSem ''Writer
+tell :: Member (Writer o) r => o -> Sem r ()
+tell = send . Tell
+
+listen :: Member (Writer o) r => Sem r a -> Sem r (o, a)
+listen = send . Listen
+
+pass :: Member (Writer o) r => Sem r (o -> o, a) -> Sem r a
+pass = send . Pass
+-- makeSem ''Writer
 
 -- TODO(KingoftheHomeless): Research if this is more or less efficient than
 -- using 'reinterpretH' + 'subsume'
@@ -169,23 +181,68 @@ runWriterSTMAction write = interpretH $ \case
       writeTVar switch True
     {-# INLINE commitPass #-}
 
+runWeaveLazyWriter :: Monoid o
+                   => Sem (Weave (LazyT2 o) ': r) a -> Lazy.WriterT o (Sem r) a
+runWeaveLazyWriter = weaveToTransWeave
+-- runWeaveLazyWriter sem0 = Sem $ \k c0 ->
+--   runSem sem0
+--     (\u c1 c2 -> case decomp u of
+--         Left g ->
+--           (`k` \(LazyT2 ~(o, x)) -> c1 x (\ores -> c2 $ \o' -> ores (o <> o')))
+--           $ weave
+--              (LazyT2 (mempty, ()))
+--              (\(LazyT2 ~(o', sem)) ->
+--                 fmap (\(LazyT2 ~(o, x)) -> LazyT2 (o' <> o, x))
+--                      (runWeaveLazyWriter sem))
+--              runWeaveLazyWriter
+--              g
+--         Right wav -> fromFOEff wav $ \ex -> \case
+--           RestoreW (LazyT2 ~(o, a)) ->
+--             c1 (ex a) $ \ores -> c2 \o' -> ores (o <> o')
+--           GetStateW main -> c1 (ex (main (LazyT2 #. (,) mempty))) c2
+--           LiftWithW main -> c1 (ex (main runWeaveLazyWriter)) c2
+--     )
+--     (\a c -> c (\o -> c0 (LazyT2 (o, a))))
+--     ($ mempty)
 
--- TODO (KingoftheHomeless):
--- Benchmark to see if switching to a more flexible variant
--- would incur a performance loss
 interpretViaLazyWriter
   :: forall o e r a
    . Monoid o
-  => (forall m x. Monad m => Weaving e (Lazy.WriterT o m) x -> Lazy.WriterT o m x)
+  => (forall x. Weaving e (Sem (e ': r)) x -> Sem r (o, x))
   -> Sem (e ': r) a
   -> Sem r (o, a)
-interpretViaLazyWriter f sem = Sem $ \(k :: forall x. Union r (Sem r) x -> m x) ->
-  let
-    go :: forall x. Sem (e ': r) x -> Lazy.WriterT o m x
-    go = usingSem $ \u -> case decomp u of
-      Right (Weaving e mkT lwr ex) -> f $ Weaving e (\n -> mkT (n . go)) lwr ex
+interpretViaLazyWriter f =
+    fmap (\ ~(a, s) -> (s, a))
+  . Lazy.runWriterT
+  #. usingSem return \u c ->
+    case decomp u of
       Left g ->
         liftHandlerWithNat
-          (Lazy.WriterT . fmap swap . interpretViaLazyWriter f)
-          k g
-  in swap <$> Lazy.runWriterT (go sem)
+          (Lazy.WriterT
+           #. fmap (\ ~(s, a) -> (a, s)) . interpretViaLazyWriter f)
+          liftSem
+          g
+        >>= c
+      Right wav ->
+        Lazy.WriterT ((\ ~(s, a) -> (a, s)) <$> f wav) >>= c
+
+-- interpretViaLazyWriter f sem0 = Sem $ \k c0 ->
+--   runSem sem0
+--     (\u c1 c2 -> case decomp u of
+--         Left g ->
+--           (`k` \(LazyT2 ~(o, x)) -> c1 x (\ores -> c2 $ \o' -> ores (o <> o')))
+--           $ weave
+--              (LazyT2 (mempty, ()))
+--              (\(LazyT2 ~(o', sem)) ->
+--                 fmap (\ ~(o, x) -> LazyT2 (o' <> o, x))
+--                      (interpretViaLazyWriter f sem))
+--              runWeaveLazyWriter
+--              g
+--         Right wav ->
+--           runSem
+--             (f wav)
+--             k
+--             (\ ~(o, x) -> c1 x (\ores -> c2 $ \o' -> ores (o <> o')))
+--     )
+--     (\a c -> c (\o -> c0 (o, a)))
+--     ($ mempty)

@@ -1,15 +1,19 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE CPP, GeneralizedNewtypeDeriving #-}
 {-# OPTIONS_HADDOCK not-home #-}
 
 module Polysemy.Internal.HigherOrder where
 
 import Data.Kind (Type)
+import Data.Functor.Identity
 import Control.Monad
 
 import Polysemy.Internal
 import Polysemy.Internal.CustomErrors (FirstOrder)
 import Polysemy.Internal.Kind
 import Polysemy.Internal.Union
+import Polysemy.Internal.Utils
+import Polysemy.Internal.Core
+import Polysemy.Internal.Reflection
 
 -- | A reified interpreter, transforming @'Polysemy.Sem' (e ': rH)@ to
 -- @'Polysemy.Sem' rH@.
@@ -337,46 +341,48 @@ interpretH :: forall e r
 interpretH h = go
   where
     go :: forall a'. Sem (e ': r) a' -> Sem r a'
-    go (Sem sem) = Sem $ \(k :: forall x. Union r' (Sem r') x -> m x) ->
-      sem $ \u -> case decomp u of
-        Left g -> k $ hoist go g
-        Right (Weaving e
-                     (mkT :: forall n x
-                           . Monad n
-                          => (forall y. Sem (e ': r) y -> n y)
-                          -> z x -> t n x
-                     )
-                     lwr
-                     ex
-              ) ->
-          let
-              commonHandler :: forall n b x
-                             . Monad b
-                            => Weaving (HigherOrder z (StT t) e r') n x
-                            -> t b x
-              commonHandler (Weaving eff _ lwr' ex') = do
-                let run_it = fmap (ex' . (<$ mkInitState lwr'))
-                case eff of
-                  GetInterpreterH -> run_it $ return $ InterpreterH go
-                  WithProcessorH main -> run_it $
-                    liftWith $ \lower -> return $ main (lower . mkT id)
-                  RestoreH t -> run_it $
-                    restoreT (return t)
-                  LiftWithH main -> run_it $ liftWith $ \lower ->
-                    return $ main (lower . go')
-              {-# INLINE commonHandler #-}
+    go (Sem sem) = Sem $ \k -> sem $ \u c -> case decomp u of
+      Left g -> k (hoist go g) c
+      Right (Sent (e :: e z y) n) ->
+        let
+          go' :: forall r' x
+               . Sem (HigherOrder z Identity e r ': r') x
+              -> Sem r' x
+          go' (Sem m) = Sem $ \k' -> m $ \u' c' -> case decomp u' of
+            Left g -> k' (hoist go' g) c'
+            Right wav -> fromFOEff wav $ \ex' -> \case
+              GetInterpreterH -> c' $ ex' $ InterpreterH go
+              WithProcessorH main -> c' $ ex' $ main $ fmap Identity #. n
+              RestoreH (Identity a) -> c' $ ex' a
+              LiftWithH main -> c' $ ex' $ main $ fmap Identity #. go'_
+          {-# INLINE go' #-}
 
-              go' :: forall r'' x
-                   . Sem (HigherOrder z (StT t) e r' ': r'') x
-                  -> t (Sem r'') x
-              go' = usingSem $ \u' -> case decomp u' of
-                Left g -> liftHandlerWithNat go' liftSem g
-                Right wav -> commonHandler wav
-              {-# NOINLINE go' #-}
+          go'_ :: forall r' x
+                . Sem (HigherOrder z Identity e r ': r') x
+               -> Sem r' x
+          go'_ = go'
+          {-# NOINLINE go'_ #-}
+        in
+          runSem (go' (h e)) k c
+      Right (Weaved (e :: e z y) (trav :: Traversal t) _ wv lwr ex) ->
+        reify trav $ \(_ :: pr s) ->
+          let
+            go' :: forall r' x
+                 . Sem (HigherOrder z (ViaTraversal s t) e r ': r') x
+                -> Sem (Weave t ': r') x
+            go' (Sem m) = Sem $ \k' -> m $ \u' c' -> case decompCoerce u' of
+              Left g -> k' (hoist go' g) c'
+              Right wav -> fromFOEff wav $ \ex' -> \case
+                GetInterpreterH -> c' $ ex' $ InterpreterH go
+                WithProcessorH main ->
+                  (`k'` c') $ inj $ GetStateW $ \mkS' ->
+                    ex' $ main $ fmap ViaTraversal #. wv . mkS'
+                RestoreH (ViaTraversal t) -> k' (inj (RestoreW t)) (c' . ex')
+                LiftWithH main -> (`k'` c') $ inj $ LiftWithW $ \lwr' ->
+                  ex' $ main $ (fmap ViaTraversal #. lwr' . go')
+            {-# NOINLINE go' #-}
           in
-            fmap ex $ lwr $ runSem (h e) $ \u' -> case decomp u' of
-              Left g -> liftHandlerWithNat go' k g
-              Right wav -> commonHandler wav
+            runSem (lwr (go' (h e))) k (c . ex)
 
 ------------------------------------------------------------------------------
 -- | A generalization of 'interpretH', 'reinterpretH', 'reinterpret2H', etc.:
@@ -397,7 +403,6 @@ genericInterpretH tPr h = interpretH h . mapMembership \case
   Here -> Here
   There pr -> There (tPr pr)
 {-# INLINE genericInterpretH #-}
-
 
 ------------------------------------------------------------------------------
 -- | The simplest way to produce an effect handler. Interprets an effect @e@ by
@@ -421,6 +426,7 @@ reinterpretH :: forall e1 e2 r a
                -> Sem (e1 ': r) a
                -> Sem (e2 ': r) a
 reinterpretH = genericInterpretH There
+{-# INLINE reinterpretH #-}
 
 ------------------------------------------------------------------------------
 -- | Like 'interpret', but instead of removing the effect @e@, reencodes it in
@@ -434,8 +440,8 @@ reinterpret :: forall e1 e2 r a
              => (∀ z x. e1 z x -> Sem (e2 ': r) x)
              -> Sem (e1 ': r) a
              -> Sem (e2 ': r) a
-reinterpret h = reinterpretH $ \e -> raise (h e)
-{-# INLINE[2] reinterpret #-}
+reinterpret h = baseInterpret h . raiseUnder
+{-# INLINE[2] reinterpret #-} -- rewrite rule
 
 ------------------------------------------------------------------------------
 -- | Like 'reinterpret2', but for higher-order effects. See 'interpretH' for a
@@ -447,6 +453,7 @@ reinterpret2H :: forall e1 e2 e3 r a
                 -> Sem (e1 ': r) a
                 -> Sem (e2 ': e3 ': r) a
 reinterpret2H = genericInterpretH (There . There)
+{-# INLINE reinterpret2H #-} -- genericInterpretH uses mapMembership
 
 ------------------------------------------------------------------------------
 -- | Like 'reinterpret', but introduces /two/ intermediary effects.
@@ -457,7 +464,7 @@ reinterpret2 :: forall e1 e2 e3 r a
              => (∀ z x. e1 z x -> Sem (e2 ': e3 ': r) x)
              -> Sem (e1 ': r) a
              -> Sem (e2 ': e3 ': r) a
-reinterpret2 h = reinterpret2H $ \e -> raise (h e)
+reinterpret2 h = baseInterpret h . raise2Under
 {-# INLINE[2] reinterpret2 #-} -- rewrite rule
 
 ------------------------------------------------------------------------------
@@ -470,6 +477,7 @@ reinterpret3H :: forall e1 e2 e3 e4 r a
                 -> Sem (e1 ': r) a
                 -> Sem (e2 ': e3 ': e4 ': r) a
 reinterpret3H = genericInterpretH (There . There . There)
+{-# INLINE reinterpret3H #-} -- genericInterpretH uses mapMembership
 
 ------------------------------------------------------------------------------
 -- | Like 'reinterpret', but introduces /three/ intermediary effects.
@@ -480,9 +488,8 @@ reinterpret3 :: forall e1 e2 e3 e4 r a
              => (∀ z x. e1 z x -> Sem (e2 ': e3 ': e4 ': r) x)
              -> Sem (e1 ': r) a
              -> Sem (e2 ': e3 ': e4 ': r) a
-reinterpret3 h =
-  reinterpret3H $ \e -> raise (h e)
-{-# INLINE[2] reinterpret3 #-}
+reinterpret3 h = baseInterpret h . raise3Under
+{-# INLINE[2] reinterpret3 #-} -- rewrite rule
 
 ------------------------------------------------------------------------------
 -- | Like 'interpret', but instead of handling the effect, allows responding to
@@ -498,8 +505,8 @@ intercept :: forall e r a
           => (∀ z x. e z x -> Sem r x)
           -> Sem r a
           -> Sem r a
-intercept h = interceptH $ \e -> raise (h e)
-{-# INLINE intercept #-} -- interceptH uses mapMembership
+intercept h = baseInterpret h . expose
+{-# INLINE intercept #-} -- expose uses mapMembership
 
 ------------------------------------------------------------------------------
 -- | Like 'intercept', but for higher-order effects.
@@ -523,7 +530,7 @@ interceptUsingH :: forall e r a
                 -> Sem r a
                 -> Sem r a
 interceptUsingH pr h = interpretH h . exposeUsing pr
-{-# INLINE interceptUsing #-} -- exposeUsing uses mapMembership
+{-# INLINE interceptUsingH #-} -- exposeUsing uses mapMembership
 
 ------------------------------------------------------------------------------
 -- | A variant of 'intercept' that accepts an explicit proof that the effect
@@ -540,5 +547,10 @@ interceptUsing :: forall e r a .
                -> (∀ z x. e z x -> Sem r x)
                -> Sem r a
                -> Sem r a
-interceptUsing pr h = interceptUsingH pr $ \e -> raise (h e)
-{-# INLINE interceptUsingH #-} -- interceptUsingH uses mapMembership
+interceptUsing pr h = baseInterpret h . exposeUsing pr
+{-# INLINE interceptUsing #-} -- exposeUsing uses mapMembership
+
+baseInterpret ::(∀ z x. e z x -> Sem r x)
+              -> InterpreterFor e r
+baseInterpret = interpretFast
+{-# INLINE baseInterpret #-}
