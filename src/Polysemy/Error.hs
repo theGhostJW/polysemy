@@ -52,14 +52,7 @@ data Error e m a where
   -- given by the second argument.
   Catch :: ∀ e m a. m a -> (e -> m a) -> Error e m a
 
---makeSem ''Error
-
-throw :: Member (Error e) r => e -> Sem r void
-throw = send . Throw
-
-catch :: Member (Error e) r => Sem r a -> (e -> Sem r a) -> Sem r a
-catch m h = send (Catch m h)
-
+makeSem ''Error
 
 ------------------------------------------------------------------------------
 -- | Upgrade an 'Either' into an 'Error' effect.

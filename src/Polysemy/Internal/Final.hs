@@ -109,18 +109,13 @@ data WeavingInfo t z m where
               -> (forall r x. Sem (Weave t ': r) x -> Sem r (t x))
               -> WeavingInfo t z m
 
+makeSem ''Final
+
 mapWeavingInfo
   :: (forall x. n x -> m x) -> WeavingInfo t z n -> WeavingInfo t z m
 mapWeavingInfo to = \case
   Untransformed n -> Untransformed (to . n)
   Transformed trav mkS wv lwr -> Transformed trav mkS (to . wv) lwr
-
--- makeSem ''Final
-
-withWeavingToFinal :: Member (Final m) r
-                   => (forall t. WeavingInfo t (Sem r) m -> m (t a))
-                   -> Sem r a
-withWeavingToFinal main = send (WithWeavingToFinal main)
 
 -- | The 'Lowering' environment, which is a 'Polysemy.Sem' with a small
 -- effect stack containing the @'Lower' m t n@ effect, which provides the

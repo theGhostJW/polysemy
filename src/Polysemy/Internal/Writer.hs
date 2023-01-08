@@ -33,15 +33,7 @@ data Writer o m a where
   -- | Run the given action and apply the function it returns to the log.
   Pass   :: m (o -> o, a) -> Writer o m a
 
-tell :: Member (Writer o) r => o -> Sem r ()
-tell = send . Tell
-
-listen :: Member (Writer o) r => Sem r a -> Sem r (o, a)
-listen = send . Listen
-
-pass :: Member (Writer o) r => Sem r (o -> o, a) -> Sem r a
-pass = send . Pass
--- makeSem ''Writer
+makeSem ''Writer
 
 -- TODO(KingoftheHomeless): Research if this is more or less efficient than
 -- using 'reinterpretH' + 'subsume'
