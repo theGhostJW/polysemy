@@ -52,8 +52,8 @@ data PolysemyStuff (l :: LookupState) = PolysemyStuff
 -- | All of the things we need to lookup.
 polysemyStuffLocations :: PolysemyStuff 'Locations
 polysemyStuffLocations = PolysemyStuff
-  { findClass = ("Polysemy.Internal.Union", "Member")
-  , semTyCon  = ("Polysemy.Internal",       "Sem")
+  { findClass = ("Polysemy.Internal.Core", "Member")
+  , semTyCon  = ("Polysemy.Internal.Core", "Sem")
   }
 
 #if __GLASGOW_HASKELL__ >= 900
