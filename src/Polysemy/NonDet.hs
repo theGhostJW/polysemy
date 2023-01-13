@@ -132,7 +132,7 @@ instance MonadTrans NonDetC where
 --     (\a c -> c [a])
 --     c0
 
-runWeaveNonDetInC :: Sem (Weave [] ': r) a -> NonDetC (Sem r) a
+runWeaveNonDetInC :: Sem (Weave [] r ': r) a -> NonDetC (Sem r) a
 runWeaveNonDetInC = usingSem return $ \u c -> case decomp u of
   Left g -> NonDetC $ \c' b' ->
     liftSem (weave
@@ -145,8 +145,9 @@ runWeaveNonDetInC = usingSem return $ \u c -> case decomp u of
     RestoreW t -> foldr (\a -> (c (ex a) <|>)) empty t
     GetStateW main -> c $ ex $ main (:[])
     LiftWithW main -> c $ ex $ main runWeaveNonDet
+    EmbedW m -> lift m >>= (c . ex)
 
-runWeaveNonDet :: Sem (Weave [] ': r) a -> Sem r [a]
+runWeaveNonDet :: Sem (Weave [] r ': r) a -> Sem r [a]
 runWeaveNonDet = runNonDetC . runWeaveNonDetInC
 
 runNonDetInC :: Sem (NonDet ': r) a -> NonDetC (Sem r) a

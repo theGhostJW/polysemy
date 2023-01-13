@@ -26,13 +26,10 @@ module Polysemy.Fatal
 
 import qualified Control.Exception as X
 import           Control.Monad
-import qualified Control.Monad.Trans.Except as E
 import           Data.Coerce
 import           Polysemy
 import           Polysemy.Error
 import           Polysemy.Final
-import           Polysemy.Internal
-import           Polysemy.Internal.Union
 
 
 ------------------------------------------------------------------------------

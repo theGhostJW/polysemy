@@ -135,7 +135,8 @@ module Polysemy
     --
     -- 'runH' and 'runH'' are enough for most purposes when using
     -- 'interpretH'. However, "Polysemy.HigherOrder" offers additional, more
-    -- complicated features which are occasionally needed.
+    -- complicated features in the cases where 'runH' and 'runH'' are
+    -- insufficient.
   , HigherOrder
   , runH
   , runH'

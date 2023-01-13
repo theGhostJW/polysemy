@@ -15,6 +15,7 @@ module Polysemy.Writer.Manager (
 import Data.Bifunctor (first)
 import Data.Semigroup
 import Polysemy
+import Polysemy.HigherOrder
 import Polysemy.Writer
 import Polysemy.Meta
 import Polysemy.Opaque
@@ -62,8 +63,7 @@ customWriterManager :: (  forall o q x
 customWriterManager interp =
   coerceEff
   >>> interpretMeta @WriterManagerMeta \case
-    WriterManagerMeta m ->
-      runMeta m
-      & collectOpaqueBundleAt @1 @'[_, _]
-      & interp
-      & runOpaqueBundleAt @0
+    WriterManagerMeta m -> do
+      ~res@(o, ta) <- runExposeMeta (fromOpaque . interp . toOpaqueAt @'[_]) m
+      a <- restoreH ta
+      return $ res `seq` (o, a)

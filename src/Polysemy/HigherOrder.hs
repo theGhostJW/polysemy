@@ -1,9 +1,29 @@
 -- | Tools for more advanced usages of 'Polysemy.interpretH'
+--
+-- Most of the `HigherOrder` combinators this module offers are more restrictive
+-- than they need to be be, and interact unintuitively with 'intercept'.
+-- This is because they're implemented using 'embedH' for efficiency reasons;
+-- see 'embedH' for more information.
+--
+-- "Polysemy.HigherOrder.Flexible" offers an alternate interface with more
+-- relaxed variants of these combinators, and interact intuitively with
+-- 'intercept' -- however, their usage could significantly degrade performance,
+-- depending on the usage characteristics of the effect it's used with.
+-- "Polysemy.HigherOrder.Flexible" is designed to be imported instead of
+-- "Polysemy.HigherOrder", or imported qualified. Only two combinators differ
+-- significantly in signature -- 'runH'' and 'runExposeH''; the @Flexible@
+-- variants are typically easier to use.
+--
+-- The following combinators are identical between "Polysemy.HigherOrder" and
+-- "Polysemy.HigherOrder.Flexible": 'restoreH', 'exposeH', 'getStateH',
+-- 'processH', 'getProcessorH', 'getInterpreterH', and 'embedH'. Every other
+-- combinator differ in signature and implementation between the two modules.
 module Polysemy.HigherOrder
   ( -- * 'HigherOrder' effect
     HigherOrder
-  , higherOrderIntoOpaque
-  , higherOrderFromOpaque
+
+    -- * Embedding 'Sem' actions
+  , embedH
 
     -- * Running higher-order chunks
   , runH
@@ -17,12 +37,15 @@ module Polysemy.HigherOrder
   , withProcessorH
   , controlWithProcessorH
   , processH
+  , ProcessorH(..)
+  , getProcessorH
 
     -- * Manipulating effectful state
+  , getStateH
   , restoreH
+  , exposeH
   , runExposeH
   , runExposeH'
-  , exposeH
 
     -- * Retrieving the current interpreter
   , InterpreterH(..)
@@ -37,17 +60,4 @@ module Polysemy.HigherOrder
   , getTypeParamsH
   ) where
 
-import Polysemy
-import Polysemy.Opaque
 import Polysemy.Internal.HigherOrder
-import Polysemy.Internal.Utils
-
-higherOrderIntoOpaque :: forall e z t eH rH r x
-                       . Sem (e ': HigherOrder z t eH rH ': r) x
-                      -> Sem (e ': Opaque (HigherOrder z t eH rH) ': r) x
-higherOrderIntoOpaque = coerceEffs
-
-higherOrderFromOpaque :: forall e z t eH rH r x
-                       . Sem (e ': Opaque (HigherOrder z t eH rH) ': r) x
-                      -> Sem (e ': HigherOrder z t eH rH ': r) x
-higherOrderFromOpaque = coerceEffs

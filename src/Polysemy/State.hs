@@ -36,9 +36,7 @@ import qualified Control.Monad.Trans.State as S
 import Data.IORef
 import Data.STRef
 import Polysemy
-import Polysemy.Internal
 import Polysemy.Internal.Combinators
-import Polysemy.Internal.Union
 
 
 ------------------------------------------------------------------------------

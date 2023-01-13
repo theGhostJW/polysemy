@@ -28,6 +28,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Fix
+import Data.Functor.Identity
 import Data.Functor.Compose
 import Data.Traversable
 import Data.Type.Equality
@@ -223,6 +224,9 @@ instance Applicative (Sem f) where
   pure a = Sem $ \_ c -> c a
   {-# INLINE pure #-}
 
+  ma <*> mb = Sem $ \k c -> runSem ma k (\f -> runSem mb k (c . f))
+  {-# INLINE (<*>) #-}
+
   liftA2 f ma mb = Sem $ \k c -> runSem ma k (\a -> runSem mb k (c . f a))
   {-# INLINE liftA2 #-}
 
@@ -273,11 +277,12 @@ instance Member Fixpoint r => MonadFix (Sem r) where
   mfix f = send $ Fixpoint f
   {-# INLINE mfix #-}
 
-data Weave t m a where
-  RestoreW  :: t a -> Weave t m a
-  GetStateW :: ((forall x. x -> t x) -> a) -> Weave t m a
-  LiftWithW :: ((forall r x. Sem (Weave t ': r) x -> Sem r (t x)) -> a)
-            -> Weave t m a
+data Weave t r m a where
+  RestoreW  :: t a -> Weave t r m a
+  GetStateW :: ((forall x. x -> t x) -> a) -> Weave t r m a
+  LiftWithW :: ((forall r' x. Sem (Weave t r' ': r') x -> Sem r' (t x)) -> a)
+            -> Weave t r m a
+  EmbedW    :: Sem r a -> Weave t r m a
 
 newtype Traversal t = Traversal {
     getTraversal :: forall f a b. Applicative f => (a -> f b) -> t a -> f (t b)
@@ -324,26 +329,26 @@ decomp (Union p a) =
 -- | Polysemy's core type that stores effect values together with information
 -- about the higher-order interpretation state of its construction site.
 data Weaving e m a where
-  Sent   ::  !(e z a) -> (forall x. z x -> m x) -> Weaving e m a
+  Sent   ::  (e z a) -> (forall x. z x -> m x) -> Weaving e m a
   Weaved
     :: forall t e z a resultType m.
-       { weaveEffect :: e z a
+       { weaveEffect :: (e z a)
        -- ^ The original effect GADT originally lifted via
        -- a variant of 'Polysemy.Internal.send'.
        -- ^ @z@ is usually @Sem rInitial@, where @rInitial@ is the effect row
        -- that was in scope when this 'Weaving' was originally created.
-       , traverseState :: Traversal t
+       , traverseState :: (Traversal t)
        -- ^ An implementation of 'traverse' for @t@.
-       , weaveInitState :: forall x. x -> t x
+       , weaveInitState :: (forall x. x -> t x)
        -- ^ A piece of state that other effects' interpreters have already
        -- woven through this 'Weaving'.
-       , weaveDistrib :: forall x. t (z x) -> m (t x)
+       , weaveDistrib :: (forall x. t (z x) -> m (t x))
        -- ^ Distribute @t@ by transforming @z@ into @m@. This is
        -- usually of the form @t ('Polysemy.Sem' (Some ': Effects ': r) x) ->
        --   Sem r (t x)@
-       , weaveLowering :: forall r x. Sem (Weave t ': r) x -> Sem r (t x)
+       , weaveLowering :: (forall r x. Sem (Weave t r ': r) x -> Sem r (t x))
        -- TODO document this
-       , weaveResult :: t a -> resultType
+       , weaveResult :: (t a -> resultType)
        -- ^ Even though @t a@ is the moral resulting type of 'Weaving', we
        -- can't expose that fact; such a thing would prevent 'Polysemy.Sem'
        -- from being a 'Monad'.
@@ -352,19 +357,40 @@ data Weaving e m a where
 fromFOEff :: Weaving e m a
           -> (forall z b. (b -> a) -> e z b -> res)
           -> res
-fromFOEff (Sent e _) c = c id e
-fromFOEff (Weaved e _ mkS _ _ ex) c = c (ex . mkS) e
+fromFOEff w c = case w of
+  Sent e _ -> c id e
+  Weaved e _ mkS _ _ ex -> c (ex . mkS) e
+{-# INLINEABLE fromFOEff #-}
+-- {-# INLINE fromFOEff #-}
+
+fromSimpleHOEff :: Weaving e (Sem r) a
+                -> (   forall z t b
+                     . (forall x. x -> t x)
+                    -> (forall x. z x -> Sem r (t x))
+                    -> (t b -> a)
+                    -> e z b
+                    -> res
+                   )
+                -> res
+fromSimpleHOEff w c = case w of
+  Sent e n -> c Identity (fmap Identity #. n) runIdentity e
+  Weaved e _ mkS wv _ ex -> c mkS (wv . mkS) ex e
+{-# INLINEABLE fromSimpleHOEff #-}
+-- {-# INLINE fromSimpleHOEff #-}
 
 hoist :: (∀ x. m x -> n x)
       -> Union r m a
       -> Union r n a
-hoist n' (Union w (Sent e n)) = Union w (Sent e (n' . n))
-hoist n' (Union w (Weaved e trav mkS wv lwr ex)) =
-  Union w $ Weaved e trav mkS (n' . wv) lwr ex
-{-# INLINABLE hoist #-}
+hoist n' = \case
+  Union w (Sent e n) ->
+    Union w (Sent e (n' . n))
+  Union w (Weaved e trav mkS wv lwr ex) ->
+    Union w $ Weaved e trav mkS (n' . wv) lwr ex
+{-# INLINEABLE hoist #-}
+-- {-# INLINE hoist #-}
 
-rewriteComposeWeave :: Sem (Weave (Compose t t') ': r) x
-                    -> Sem (Weave t' ': Weave t ': r) x
+rewriteComposeWeave :: Sem (Weave (Compose t t') r ': r) x
+                    -> Sem (Weave t' (Weave t r ': r) ': Weave t r ': r) x
 rewriteComposeWeave sem = Sem $ \k -> runSem sem $ \u c -> case u of
   Union Here wav -> fromFOEff wav $ \ex -> \case
     RestoreW (Compose tt') ->
@@ -378,40 +404,45 @@ rewriteComposeWeave sem = Sem $ \k -> runSem sem $ \u c -> case u of
       (`k` id) $ injUsing (There Here) $ LiftWithW \lwr ->
       (`k` c) $ injUsing Here $ LiftWithW $ \lwr' ->
       ex $ main (fmap Compose #. lwr . lwr' . go)
+    EmbedW m ->
+      k (injUsing Here (EmbedW (sendUsing Here (EmbedW m)))) (c . ex)
   Union (There pr) wav -> k (hoist go (Union (There (There pr)) wav)) c
   where
-    go :: Sem (Weave (Compose t t') ': r) x -> Sem (Weave t' ': Weave t ': r) x
+    go :: Sem (Weave (Compose t t') r ': r) x
+       -> Sem (Weave t' (Weave t r ': r) ': Weave t r ': r) x
     go = rewriteComposeWeave
     {-# NOINLINE go #-}
-{-# INLINE rewriteComposeWeave #-}
+{-# INLINEABLE rewriteComposeWeave #-}
+-- {-# INLINE rewriteComposeWeave #-}
 
 weave :: (Traversable t, forall x y. Coercible x y => Coercible (n x) (n y))
       => t ()
       -> (forall x. t (m x) -> n (t x))
-      -> (forall r' x. Sem (Weave t ': r') x -> Sem r' (t x))
+      -> (forall r' x. Sem (Weave t r' ': r') x -> Sem r' (t x))
       -> Union r m a
       -> Union r n (t a)
-weave s' wv' lwr' (Union pr (Sent e n)) =
-  Union pr $ Weaved e (Traversal traverse) (<$ s') (wv' . fmap n) lwr' id
-weave s' wv' lwr' (Union pr (Weaved e (Traversal trav) mkS wv lwr ex)) =
-  let
-    cTrav = Traversal (\f -> fmap Compose . traverse (trav f) .# getCompose)
-    cEx = fmap ex .# getCompose
-  in
-    Union pr $
-      Weaved
-        e
-        cTrav
-        (\x -> Compose $ mkS x <$ s')
-        (coerce #. wv' . fmap wv .# getCompose)
-        (fmap Compose #. lwr' . lwr . rewriteComposeWeave)
-        cEx
+weave s' wv' lwr' = \case
+  Union pr (Sent e n) ->
+    Union pr $ Weaved e (Traversal traverse) (<$ s') (wv' . fmap n) lwr' id
+  Union pr (Weaved e (Traversal trav) mkS wv lwr ex) ->
+    let
+      cTrav = Traversal (\f -> fmap Compose . traverse (trav f) .# getCompose)
+      cEx = fmap ex .# getCompose
+    in
+      Union pr $
+        Weaved
+          e
+          cTrav
+          (\x -> Compose $ mkS x <$ s')
+          (coerce #. wv' . fmap wv .# getCompose)
+          (fmap Compose #. lwr' . lwr . rewriteComposeWeave)
+          cEx
 {-# INLINABLE weave #-}
 {-# SPECIALIZE INLINE
   weave :: Traversable t
         => t ()
         -> (forall x. t (m x) -> Sem r'' (t x))
-        -> (forall r' x. Sem (Weave t ': r') x -> Sem r' (t x))
+        -> (forall r' x. Sem (Weave t r' ': r') x -> Sem r' (t x))
         -> Union r m a -> Union r (Sem r'') (t a)
   #-}
 
@@ -419,15 +450,18 @@ weave s' wv' lwr' (Union pr (Weaved e (Traversal trav) mkS wv lwr ex)) =
 rewriteWeaving :: (∀ z x. e z x -> e' z x)
                -> Weaving e m a
                -> Weaving e' m a
-rewriteWeaving t (Sent e n) = Sent (t e) n
-rewriteWeaving t (Weaved e trav mkS wv lwr ex) = Weaved (t e) trav mkS wv lwr ex
+rewriteWeaving t = \case
+  Sent e n -> Sent (t e) n
+  Weaved e trav mkS wv lwr ex -> Weaved (t e) trav mkS wv lwr ex
 {-# INLINEABLE rewriteWeaving #-}
+-- {-# INLINE rewriteWeaving #-}
 
 ------------------------------------------------------------------------------
 -- | Lift an effect @e@ into a 'Union' capable of holding it.
 inj :: forall e r z a. Member e r => e z a -> Union r z a
 inj = injUsing membership
-{-# INLINABLE inj #-}
+{-# INLINEABLE inj #-}
+-- {-# INLINE inj #-}
 
 ------------------------------------------------------------------------------
 -- | Lift an effect @e@ into a 'Union' capable of holding it,
@@ -435,7 +469,8 @@ inj = injUsing membership
 injUsing :: forall e r z a.
   ElemOf e r -> e z a -> Union r z a
 injUsing pr = injViaUsing pr id
-{-# INLINABLE injUsing #-}
+{-# INLINEABLE injUsing #-}
+-- {-# INLINE injUsing #-}
 
 ------------------------------------------------------------------------------
 -- | Lift an effect @e@ into a 'Union' capable of holding it given a natural
@@ -443,7 +478,8 @@ injUsing pr = injViaUsing pr id
 injVia :: forall e r z m a
         . Member e r => (forall x. z x -> m x) -> e z a -> Union r m a
 injVia = injViaUsing membership
-{-# INLINABLE injVia #-}
+{-# INLINEABLE injVia #-}
+-- {-# INLINE injVia #-}
 
 ------------------------------------------------------------------------------
 -- | Lift an effect @e@ into a 'Union' capable of holding it,
@@ -454,13 +490,15 @@ injViaUsing :: forall e r z m a
             -> (forall x. z x -> m x)
             -> e z a -> Union r m a
 injViaUsing pr n e = Union pr (Sent e n)
-{-# INLINABLE injViaUsing #-}
+{-# INLINEABLE injViaUsing #-}
+-- {-# INLINE injViaUsing #-}
 
 ------------------------------------------------------------------------------
 -- | Lift a @'Weaving' e@ into a 'Union' capable of holding it.
 injWeaving :: forall e r m a. Member e r => Weaving e m a -> Union r m a
 injWeaving = Union membership
-{-# INLINABLE injWeaving #-}
+{-# INLINEABLE injWeaving #-}
+-- {-# INLINE injWeaving #-}
 
 ------------------------------------------------------------------------------
 -- | Execute an action of an effect.
@@ -482,6 +520,7 @@ injWeaving = Union membership
 -- 'Polysemy.makeSem' allows you to eliminate this boilerplate.
 send :: Member e r => e (Sem r) a -> Sem r a
 send = liftSem . inj
+-- {-# INLINE[3] send #-}
 {-# NOINLINE[3] send #-}
 
 ------------------------------------------------------------------------------
@@ -495,6 +534,7 @@ sendVia :: forall e z r a
         => (forall x. z x -> Sem r x)
         -> e z a -> Sem r a
 sendVia n = liftSem . injVia n
+-- {-# INLINE[3] sendVia #-}
 {-# NOINLINE[3] sendVia #-}
 
 ------------------------------------------------------------------------------
@@ -505,6 +545,7 @@ sendVia n = liftSem . injVia n
 -- in order to conditionally make use of effects.
 sendUsing :: ElemOf e r -> e (Sem r) a -> Sem r a
 sendUsing pr = liftSem . injUsing pr
+-- {-# INLINE[3] sendUsing #-}
 {-# NOINLINE[3] sendUsing #-}
 
 ------------------------------------------------------------------------------
@@ -513,6 +554,7 @@ sendUsing pr = liftSem . injUsing pr
 -- used for the higher-order thunks in the effect to @'Polysemy.Sem' r@.
 sendViaUsing :: ElemOf e r -> (forall x. z x -> Sem r x) -> e z a -> Sem r a
 sendViaUsing pr n = liftSem . injViaUsing pr n
+-- {-# INLINE[3] sendViaUsing #-}
 {-# NOINLINE[3] sendViaUsing #-}
 
 
@@ -522,12 +564,15 @@ sendViaUsing pr n = liftSem . injViaUsing pr n
 -- @since 1.0.0.0
 embed :: Member (Embed m) r => m a -> Sem r a
 embed = send .# Embed
+{-# INLINEABLE embed #-}
+-- {-# INLINE embed #-}
 
 ------------------------------------------------------------------------------
 -- | Create a 'Sem' from a 'Union' with matching stacks.
 liftSem :: Union r (Sem r) a -> Sem r a
-liftSem u = Sem $ \k -> k u
-{-# INLINE liftSem #-}
+liftSem !u = Sem $ \k -> k u
+{-# INLINEABLE liftSem #-}
+-- {-# INLINE liftSem #-}
 
 
 ------------------------------------------------------------------------------

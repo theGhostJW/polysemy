@@ -106,7 +106,7 @@ data WeavingInfo t z m where
   Transformed :: Traversal t
               -> (forall x. x -> t x)
               -> (forall x. t (z x) -> m (t x))
-              -> (forall r x. Sem (Weave t ': r) x -> Sem r (t x))
+              -> (forall r x. Sem (Weave t r ': r) x -> Sem r (t x))
               -> WeavingInfo t z m
 
 makeSem ''Final
@@ -372,15 +372,20 @@ runLowering lowering = \case
     let
       go :: forall x
           . Lowering m (ViaTraversal s t) n x
-         -> Sem '[Weave t, Embed m, Final m] x
-      go = reinterpret \case
-        RestoreL (ViaTraversal t) -> send (RestoreW t)
-        LiftWithL main ->
-          send (LiftWithW (\lwr -> main (fmap ViaTraversal . runM . lwr . go)))
-          >>= embed
-        WithProcessorL main ->
-          send (GetStateW (\mkS -> main (fmap ViaTraversal . wv . mkS)))
-          >>= embed
+         -> Sem '[Weave t '[Embed m, Final m], Embed m, Final m] x
+      go =
+        reinterpret \case
+          RestoreL (ViaTraversal t) -> sendUsing Here (RestoreW t)
+          LiftWithL main ->
+            sendUsing Here
+              (LiftWithW (\lwr -> main (fmap ViaTraversal . runM . lwr . go)))
+            >>= sendUsing Here . EmbedW . embed
+          WithProcessorL main ->
+            sendUsing Here
+              (GetStateW (\mkS -> main (fmap ViaTraversal . wv . mkS)))
+            >>= sendUsing Here . EmbedW . embed
+        >>> intercept @(Embed m) (\(Embed e) ->
+              sendUsing Here $ EmbedW $ embed e )
     in
       runM $ lwr0 $ go lowering
 

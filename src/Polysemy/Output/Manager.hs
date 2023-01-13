@@ -16,6 +16,7 @@ module Polysemy.Output.Manager (
 import Data.Bifunctor (first)
 import Data.Semigroup
 import Polysemy
+import Polysemy.HigherOrder
 import Polysemy.Output
 import Polysemy.Meta
 import Polysemy.Opaque
@@ -70,8 +71,7 @@ customOutputManager :: (  forall o q x
 customOutputManager interp =
   coerceEff
   >>> interpretMeta @OutputManagerMeta \case
-    OutputManagerMeta m ->
-      runMeta m
-      & collectOpaqueBundleAt @1 @'[_, _]
-      & interp
-      & runOpaqueBundleAt @0
+    OutputManagerMeta m -> do
+      ~res@(o, ta) <- runExposeMeta (fromOpaque . interp . toOpaqueAt @'[_]) m
+      a <- restoreH ta
+      return $ res `seq` (o, a)

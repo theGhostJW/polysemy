@@ -13,16 +13,13 @@ module Polysemy.Internal.Combinators
   , lazilyStateful
   ) where
 
-import Data.Traversable
-import Data.Foldable
 import Data.Coerce
 import Polysemy.Internal
 import Polysemy.Internal.Union
 import Polysemy.Internal.Core
 import Polysemy.Internal.Utils
-import Polysemy.Internal.WeaveClass
 
-runWeaveState :: s -> Sem (Weave ((,) s) ': r) a -> Sem r (s, a)
+runWeaveState :: s -> Sem (Weave ((,) s) r ': r) a -> Sem r (s, a)
 runWeaveState s0 sem0 = Sem $ \k c0 ->
   runSem sem0
     (\u c s -> case decomp u of
@@ -36,11 +33,12 @@ runWeaveState s0 sem0 = Sem $ \k c0 ->
           RestoreW (s', a) -> c (ex a) s'
           GetStateW main -> c (ex (main ((,) s))) s
           LiftWithW main -> c (ex (main (runWeaveState s))) s
+          EmbedW m -> runSem m k (\a -> c (ex a) s)
     )
     (\a s -> c0 (s, a))
     s0
 
-runWeaveLazyState :: s -> Sem (Weave (LazyT2 s) ': r) a -> Sem r (LazyT2 s a)
+runWeaveLazyState :: s -> Sem (Weave (LazyT2 s) r ': r) a -> Sem r (LazyT2 s a)
 runWeaveLazyState s0 sem0 = Sem $ \k c0 ->
   runSem sem0
     (\u c s -> case decomp u of
@@ -54,6 +52,7 @@ runWeaveLazyState s0 sem0 = Sem $ \k c0 ->
           RestoreW (LazyT2 ~(s', a)) -> c (ex a) s'
           GetStateW main -> c (ex (main (LazyT2 #. (,) s))) s
           LiftWithW main -> c (ex (main (runWeaveLazyState s))) s
+          EmbedW m -> runSem m k (\a -> c (ex a) s)
     )
     (\a s -> c0 (LazyT2 (s, a)))
     s0

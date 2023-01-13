@@ -156,7 +156,7 @@ instance Raise r r' => Raise r (_0 ': r') where
 -- can introduce an arbitrary number of effects, see 'raise_'.
 raise :: ∀ e r a. Sem r a -> Sem (e ': r) a
 raise = raise_
-{-# INLINE raise #-}
+{-# INLINE[3] raise #-}
 
 
 ------------------------------------------------------------------------------

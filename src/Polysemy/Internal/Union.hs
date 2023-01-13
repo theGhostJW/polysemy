@@ -70,6 +70,7 @@ module Polysemy.Internal.Union
 import Data.Coerce
 import Data.Functor.Identity
 import Data.Typeable
+import Control.Monad.Trans
 import Polysemy.Internal.Kind
 import Polysemy.Internal.WeaveClass
 import Polysemy.Internal.Core
@@ -77,7 +78,7 @@ import Polysemy.Internal.Sing (SList (..))
 
 
 weaveToTransWeave :: MonadTransWeave t
-                  => Sem (Weave (StT t) ': r) a -> t (Sem r) a
+                  => Sem (Weave (StT t) r ': r) a -> t (Sem r) a
 weaveToTransWeave = usingSem return $ \u c -> case decomp u of
   Left g -> liftHandlerWithNat weaveToTransWeave liftSem g >>= c
   Right wav -> fromFOEff wav $ \ex -> \case
@@ -86,6 +87,7 @@ weaveToTransWeave = usingSem return $ \u c -> case decomp u of
       return $ main (\x -> runIdentity (lwr (return x)))
     LiftWithW main -> (>>= c . ex) $ liftWith $ \lwr ->
       return $ main (lwr . weaveToTransWeave)
+    EmbedW m -> lift m >>= (c . ex)
 
 -- Not used (nearly as much) anymore
 liftHandler :: ( MonadTransWeave t, Monad m, Monad n

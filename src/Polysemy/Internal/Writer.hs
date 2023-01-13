@@ -4,20 +4,19 @@
 -- | Description: The 'Writer' effect
 module Polysemy.Internal.Writer where
 
+import Data.Functor.Compose
 import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
 import qualified Control.Monad.Trans.Writer.Lazy as Lazy
 
-import Data.Bifunctor
-import Data.Tuple (swap)
 import Data.Semigroup
 
 import Polysemy
 import Polysemy.Final
+import Polysemy.HigherOrder
 
 import Polysemy.Internal
-import Polysemy.Internal.Combinators
 import Polysemy.Internal.Union
 import Polysemy.Internal.Core
 import Polysemy.Internal.Utils
@@ -71,27 +70,29 @@ runWriterSTMAction :: forall o r a
                          -> Sem r a
 runWriterSTMAction write = interpretH $ \case
   Tell o -> embedFinal $ atomically (write o)
-  Listen m -> controlFinal $ \lower -> mask $ \restore -> do
-    -- See below to understand how this works
-    tvar   <- newTVarIO mempty
-    switch <- newTVarIO False
-    fa     <-
-        restore
-          (lower (runWriterSTMAction (writeListen tvar switch) (runH' m)))
-      `onException`
-        commitListen tvar switch
-    o      <- commitListen tvar switch
-    return $ fmap (o, ) fa
-  Pass m -> controlFinal $ \lower -> mask $ \restore -> do
-    -- See below to understand how this works
-    tvar   <- newTVarIO mempty
-    switch <- newTVarIO False
-    t      <-
-        restore (lower (runWriterSTMAction (writePass tvar switch) (runH' m)))
-      `onException`
-        commitPass tvar switch id
-    commitPass tvar switch $ foldr (const . fst) id t
-    return $ fmap snd t
+  Listen m -> controlWithProcessorH $ \lwr ->
+    controlFinal $ \lower -> mask $ \restore -> do
+      -- See below to understand how this works
+      tvar   <- newTVarIO mempty
+      switch <- newTVarIO False
+      fa     <-
+          restore
+            (lower (runWriterSTMAction (writeListen tvar switch) (lwr m)))
+        `onException`
+          commitListen tvar switch
+      o      <- commitListen tvar switch
+      return $ (fmap . fmap) (o, ) fa
+  Pass m -> controlWithProcessorH $ \lwr ->
+    controlFinal $ \lower -> mask $ \restore -> do
+      -- See below to understand how this works
+      tvar   <- newTVarIO mempty
+      switch <- newTVarIO False
+      t      <-
+          restore (lower (runWriterSTMAction (writePass tvar switch) (lwr m)))
+        `onException`
+          commitPass tvar switch id
+      commitPass tvar switch $ foldr (const . fst) id (Compose t)
+      return $ (fmap . fmap) snd t
 
   where
     {- KingoftheHomeless:
@@ -174,7 +175,7 @@ runWriterSTMAction write = interpretH $ \case
     {-# INLINE commitPass #-}
 
 runWeaveLazyWriter :: Monoid o
-                   => Sem (Weave (LazyT2 o) ': r) a -> Lazy.WriterT o (Sem r) a
+                   => Sem (Weave (LazyT2 o) r ': r) a -> Lazy.WriterT o (Sem r) a
 runWeaveLazyWriter = weaveToTransWeave
 -- runWeaveLazyWriter sem0 = Sem $ \k c0 ->
 --   runSem sem0
@@ -217,24 +218,3 @@ interpretViaLazyWriter f =
         >>= c
       Right wav ->
         Lazy.WriterT ((\ ~(s, a) -> (a, s)) <$> f wav) >>= c
-
--- interpretViaLazyWriter f sem0 = Sem $ \k c0 ->
---   runSem sem0
---     (\u c1 c2 -> case decomp u of
---         Left g ->
---           (`k` \(LazyT2 ~(o, x)) -> c1 x (\ores -> c2 $ \o' -> ores (o <> o')))
---           $ weave
---              (LazyT2 (mempty, ()))
---              (\(LazyT2 ~(o', sem)) ->
---                 fmap (\ ~(o, x) -> LazyT2 (o' <> o, x))
---                      (interpretViaLazyWriter f sem))
---              runWeaveLazyWriter
---              g
---         Right wav ->
---           runSem
---             (f wav)
---             k
---             (\ ~(o, x) -> c1 x (\ores -> c2 $ \o' -> ores (o <> o')))
---     )
---     (\a c -> c (\o -> c0 (o, a)))
---     ($ mempty)

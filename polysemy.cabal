@@ -50,6 +50,8 @@ library
       Polysemy.Final
       Polysemy.Fixpoint
       Polysemy.HigherOrder
+      Polysemy.HigherOrder.Flexible
+      Polysemy.HigherOrder.RewriteRule
       Polysemy.Input
       Polysemy.Internal
       Polysemy.Internal.Bundle
@@ -76,6 +78,7 @@ library
       Polysemy.IO
       Polysemy.Membership
       Polysemy.Meta
+      Polysemy.Meta.Flexible
       Polysemy.Newtype
       Polysemy.NonDet
       Polysemy.Opaque

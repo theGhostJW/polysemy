@@ -13,6 +13,7 @@ module Polysemy.Exceptional (
   ) where
 
 import Polysemy
+import Polysemy.HigherOrder
 import Polysemy.Meta
 import Polysemy.Fatal
 import Polysemy.Membership
@@ -66,9 +67,12 @@ runExceptional interp =
   coerceEff
   >>> interpretMeta @(ExceptionalMeta eff exc) \case
     ExceptionalMeta m ->
-      runMeta m
-      & collectOpaqueBundleAt @1 @'[_, _]
-      & interp
-      & coerceEff
-      & runFatal
-      & runOpaqueBundleAt @0
+      runExposeMeta
+        (toOpaqueAt @'[_]
+         >>> interp
+         >>> coerceEff
+         >>> runFatal
+         >>> fromOpaque
+         ) m >>= \case
+        Left e -> return (Left e)
+        Right ta -> Right <$> restoreH ta

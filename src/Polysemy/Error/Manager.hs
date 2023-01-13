@@ -12,6 +12,7 @@ module Polysemy.Error.Manager (
   ) where
 
 import Polysemy
+import Polysemy.HigherOrder
 import Polysemy.Error
 import Polysemy.Meta
 import Polysemy.Opaque
@@ -51,7 +52,6 @@ customErrorManager interp =
   coerceEff
   >>> interpretMeta @ErrorManagerMeta \case
     ErrorManagerMeta m ->
-      runMeta m
-      & collectOpaqueBundleAt @1 @'[_, _]
-      & interp
-      & runOpaqueBundleAt @0
+      runExposeMeta (fromOpaque . interp . toOpaqueAt @'[_]) m >>= \case
+        Left e -> return (Left e)
+        Right ta -> Right <$> restoreH ta

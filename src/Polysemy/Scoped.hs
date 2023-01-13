@@ -51,10 +51,7 @@ runScoped interp =
   coerceEff
   >>> interpretMeta @(ScopedMeta eff param) \case
     ScopedMeta param m ->
-      runMeta m
-      & collectOpaqueBundleAt @1 @'[_, _]
-      & interp param
-      & runOpaqueBundleAt @0
+      runMeta (fromOpaque . interp param . toOpaqueAt @'[_]) m
 
 runScoped_
   :: (forall q x. Sem (eff ': Opaque q ': r) x -> Sem (Opaque q ': r) x)

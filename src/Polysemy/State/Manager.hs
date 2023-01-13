@@ -12,6 +12,7 @@ module Polysemy.State.Manager (
   ) where
 
 import Polysemy
+import Polysemy.HigherOrder
 import Polysemy.State
 import Polysemy.Meta
 import Polysemy.Opaque
@@ -52,8 +53,8 @@ customStateManager :: (  forall s q x
 customStateManager interp =
   coerceEff
   >>> interpretMeta @StateManagerMeta \case
-    StateManagerMeta s m ->
-      runMeta m
-      & collectOpaqueBundleAt @1 @'[_, _]
-      & interp s
-      & runOpaqueBundleAt @0
+    StateManagerMeta s m -> do
+      ~res@(s', ta) <-
+          runExposeMeta (fromOpaque . interp s . toOpaqueAt @'[_]) m
+      a <- restoreH ta
+      return $ res `seq` (s', a)

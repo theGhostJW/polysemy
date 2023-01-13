@@ -12,6 +12,7 @@ module Polysemy.AtomicState.Manager (
   ) where
 
 import Polysemy
+import Polysemy.HigherOrder
 import Polysemy.AtomicState
 import Polysemy.Meta
 import Polysemy.Opaque
@@ -54,8 +55,8 @@ customAtomicStateManager :: (  forall s q x
 customAtomicStateManager interp =
   coerceEff
   >>> interpretMeta @AtomicStateManagerMeta \case
-    AtomicStateManagerMeta s m ->
-      runMeta m
-      & collectOpaqueBundleAt @1 @'[_, _]
-      & interp s
-      & runOpaqueBundleAt @0
+    AtomicStateManagerMeta s m -> do
+      ~res@(s', ta) <-
+          runExposeMeta (fromOpaque . interp s . toOpaqueAt @'[_]) m
+      a <- restoreH ta
+      return $ res `seq` (s', a)

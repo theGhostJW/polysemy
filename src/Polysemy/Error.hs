@@ -29,11 +29,11 @@ module Polysemy.Error
 
 import qualified Control.Exception          as X
 import           Control.Monad
-import qualified Control.Monad.Trans.Except as E
 import           Data.Unique                (Unique, hashUnique, newUnique)
 import           GHC.Exts                   (Any)
 import           Polysemy
 import           Polysemy.Final
+import           Polysemy.HigherOrder
 import           Polysemy.Internal
 import           Polysemy.Internal.Union
 import           Polysemy.Internal.Core
@@ -229,7 +229,7 @@ runError sem0 = Sem $ \k c0 ->
     go = runError
     {-# NOINLINE go #-}
 
-runWeaveError :: Sem (Weave (Either e) ': r) a -> Sem r (Either e a)
+runWeaveError :: Sem (Weave (Either e) r ': r) a -> Sem r (Either e a)
 runWeaveError sem0 = Sem $ \k c0 ->
   runSem sem0
     (\u c -> case decomp u of
@@ -243,6 +243,7 @@ runWeaveError sem0 = Sem $ \k c0 ->
           RestoreW t -> either (c0 . Left) (c . ex) t
           GetStateW main -> c $ ex $ main Right
           LiftWithW main -> c $ ex $ main runWeaveError
+          EmbedW m -> runSem m k (\a -> c (ex a))
     )
     (c0 . Right)
 
@@ -262,8 +263,8 @@ mapError
 mapError f = interpretH $ \case
   Throw e -> throw $ f e
   Catch action handler ->
-    runError (runH' action) >>= \case
-      Right x -> pure x
+    runExposeH' runError action >>= \case
+      Right tx -> restoreH tx
       Left e  -> runH (handler e)
 
 

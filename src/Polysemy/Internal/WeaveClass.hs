@@ -19,7 +19,6 @@ import Data.Functor.Compose
 import Data.Functor.Identity
 import Data.Tuple
 import Data.Foldable
-import Data.Traversable
 import Polysemy.Internal.Utils
 import Data.Kind (Type)
 
@@ -105,12 +104,12 @@ instance MonadTransWeave (LSt.StateT s) where
   hoistT nt = LSt.mapStateT nt
 
   controlT main = LSt.StateT $ \s ->
-    (\(LazyT2 ~(s, a)) -> (a, s))
-    <$> main (\m -> (\ ~(a, s) -> LazyT2 (s, a)) <$> LSt.runStateT m s)
+    (\(LazyT2 ~(s', a)) -> (a, s'))
+    <$> main (\m -> (\ ~(a, s') -> LazyT2 (s', a)) <$> LSt.runStateT m s)
 
   liftWith main = LSt.StateT $ \s ->
         (, s)
-    <$> main (\m -> (\ ~(a, s) -> LazyT2 (s, a)) <$> LSt.runStateT m s)
+    <$> main (\m -> (\ ~(a, s') -> LazyT2 (s', a)) <$> LSt.runStateT m s)
 
   restoreT m = LSt.StateT $ \_ -> (\(LazyT2 ~(s, a)) -> (a, s)) <$> m
 

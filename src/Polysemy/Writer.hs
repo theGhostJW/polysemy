@@ -73,13 +73,13 @@ runWriter = runState mempty . reinterpretH
   (\case
       Tell o -> modify' (<> o)
       Listen m -> do
-        -- runExposeH' to prevent local failures from ruining our day
-        (o, ta) <- runWriter (runExposeH' m)
+        (o, ta) <- runExposeH' runWriter m
+        -- modify *before* restoring the state
         modify' (<> o)
         a <- restoreH ta
         return (o, a)
       Pass m -> do
-        (o, t) <- runWriter (runExposeH' m)
+        (o, t) <- runExposeH' runWriter m
         -- Try to extract the modification function from the t.
         -- If "m" failed, default to id.
         let f = foldr (const . fst) id t

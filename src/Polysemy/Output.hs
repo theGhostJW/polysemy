@@ -27,14 +27,12 @@ module Polysemy.Output
 
 import Data.IORef
 import Control.Concurrent.STM
-import qualified Control.Monad.Trans.Writer.Lazy as Lazy
 
 import Data.Semigroup (Endo(..))
 import Data.Bifunctor (first)
 import Polysemy
 import Polysemy.State
 import Control.Monad (when)
-import Control.Monad.Trans
 
 import Polysemy.Internal.Union
 import Polysemy.Internal.Writer

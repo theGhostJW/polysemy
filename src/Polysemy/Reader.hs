@@ -53,7 +53,7 @@ asks f = f <$> ask
 runReader :: i -> Sem (Reader i ': r) a -> Sem r a
 runReader i = interpretH $ \case
   Ask -> return i
-  Local f m -> runReader (f i) (runH' m)
+  Local f m -> runH' (runReader (f i)) m
 
 
 ------------------------------------------------------------------------------
