@@ -64,7 +64,7 @@ scopeHO () use =
 
 handleHO :: Int -> () -> EffHandlerH HO r
 handleHO n () = \case
-  Inc ma -> interpretH (handleHO (n + 1) ()) (runH' ma)
+  Inc ma -> runH' (interpretH (handleHO (n + 1) ())) ma
   Ret -> return n
 
 data Esc :: Effect where

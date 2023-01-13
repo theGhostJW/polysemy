@@ -362,8 +362,9 @@ interpretMeta h =
             LiftWithH main -> liftWithH $ \lwr -> return $
               main (lwr . rewriteHigherOrder)
             RestoreH t -> restoreH t
+            GetStateH -> getStateH
             _ -> errorWithoutStackTrace
-                  "rewriteHigherOrderCommon: not commonly handler"
+                  "rewriteHigherOrderCommon: not commonly handled"
 
           rewriteHigherOrderFirst
             :: forall r' y mh
