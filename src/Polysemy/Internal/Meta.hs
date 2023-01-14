@@ -105,11 +105,8 @@ metaIntoMeta n = rewrite \case
   MetaMetaRun metarun -> MetaMetaRun metarun
   SendMeta metaeff to1 to2 -> SendMeta (n metaeff) to1 to2
 
-mkIntoMeta ::
-  ∀ eff metaeff m x.
-  (eff m x -> metaeff '[] m x) ->
-  eff m x -> Meta metaeff m x
-mkIntoMeta n e = SendMeta (n e) id (\_ u _ -> absurdMembership u)
+mkIntoMeta :: ∀ metaeff m x. metaeff '[] m x -> Meta metaeff m x
+mkIntoMeta e = SendMeta e id (\_ u _ -> absurdMembership u)
 
 data HandlingMeta metaeffect t rH l :: Effect where
   HandlingMetaMetaRun
@@ -389,7 +386,7 @@ interpretMeta h =
           rewriteHigherOrder
             :: forall rC y mh
              . mh ~ HandlingMeta metaeff t r l
-            =>Sem (HigherOrder z t meta (mh ': r) rC ': rC) y
+            => Sem (HigherOrder z t meta (mh ': r) rC ': rC) y
             -> Sem (HigherOrder k t meta (MetaRun ': r) rC ': rC) y
           rewriteHigherOrder = reinterpret \case
             EmbedH m -> embedH m

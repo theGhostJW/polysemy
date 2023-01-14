@@ -132,11 +132,19 @@ rewrite
      . (forall z x. e1 z x -> e2 z x)
     -> Sem (e1 ': r) a
     -> Sem (e2 ': r) a
-rewrite f (Sem m) = Sem $ \k -> m $ \u ->
-  k $ hoist (rewrite f) $ case decompCoerce u of
-    Left x -> x
-    Right wav -> Union Here (rewriteWeaving f wav)
-      -- Union Here $ Weaving (f e) mkT lwr ex
+rewrite f = go
+  where
+    go :: forall x. Sem (e1 ': r) x -> Sem (e2 ': r) x
+    go (Sem m) = Sem $ \k -> m $ \u ->
+      k $ hoist go_ $ case decompCoerce u of
+        Left x -> x
+        Right wav -> Union Here (rewriteWeaving f wav)
+    {-# INLINE go #-}
+
+    go_ :: forall x. Sem (e1 ': r) x -> Sem (e2 ': r) x
+    go_ = go
+    {-# NOINLINE go_ #-}
+{-# INLINEABLE rewrite #-}
 
 
 ------------------------------------------------------------------------------
@@ -151,6 +159,7 @@ transform
     -> Sem (e1 ': r) a
     -> Sem r a
 transform = transformUsing membership
+{-# INLINE transform #-}
 
 transformUsing
     :: forall e2 e1 r a
@@ -158,7 +167,16 @@ transformUsing
     -> (forall z x. e1 z x -> e2 z x)
     -> Sem (e1 ': r) a
     -> Sem r a
-transformUsing pr f (Sem m) = Sem $ \k -> m $ \u ->
-  k $ hoist (transformUsing pr f) $ case decomp u of
-    Left g -> g
-    Right wav -> Union pr $ rewriteWeaving f wav
+transformUsing pr f = go
+  where
+    go :: forall x. Sem (e1 ': r) x -> Sem r x
+    go (Sem m) = Sem $ \k -> m $ \u ->
+      k $ hoist go_ $ case decomp u of
+        Left g -> g
+        Right wav -> Union pr $ rewriteWeaving f wav
+    {-# INLINE go #-}
+
+    go_ :: forall x. Sem (e1 ': r) x -> Sem r x
+    go_ = go
+    {-# NOINLINE go_ #-}
+{-# INLINEABLE transformUsing #-}

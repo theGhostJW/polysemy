@@ -108,7 +108,7 @@ mapMembership n = go
     go_ :: forall x. Sem r x -> Sem r' x
     go_ = go
     {-# NOINLINE go_ #-}
-{-# NOINLINE[0] mapMembership #-}
+{-# INLINEABLE[0] mapMembership #-}
 
 {-# RULES
 "mapMembership/id" [2]
@@ -441,6 +441,7 @@ sinkBelow :: forall l e r a
 sinkBelow = mapMembership \case
   Here -> extendMembershipLeft @(e ': r) (singList @l) Here
   There pr -> injectMembership @r (singList @l) (singList @'[e]) pr
+{-# INLINE sinkBelow #-}
 
 floatAbove :: forall l e r a
            . KnownList l => Sem (Append l (e ': r)) a -> Sem (e ': Append l r) a
@@ -450,6 +451,7 @@ floatAbove = mapMembership \pr ->
     Right Here -> Here
     Right (There pr') ->
       There (extendMembershipLeft @r (singList @l) pr')
+{-# INLINE floatAbove #-}
 
 interpretFast :: forall e r. (∀ z x. e z x -> Sem r x) -> InterpreterFor e r
 interpretFast h = go
@@ -463,4 +465,4 @@ interpretFast h = go
     go_ :: InterpreterFor e r
     go_ = go
     {-# NOINLINE go_ #-}
-{-# INLINE interpretFast #-}
+{-# INLINEABLE interpretFast #-}

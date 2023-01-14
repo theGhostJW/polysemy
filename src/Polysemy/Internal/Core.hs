@@ -329,26 +329,26 @@ decomp (Union p a) =
 -- | Polysemy's core type that stores effect values together with information
 -- about the higher-order interpretation state of its construction site.
 data Weaving e m a where
-  Sent   ::  (e z a) -> (forall x. z x -> m x) -> Weaving e m a
+  Sent :: e z a -> !(forall x. z x -> m x) -> Weaving e m a
   Weaved
     :: forall t e z a resultType m.
-       { weaveEffect :: (e z a)
+       { weaveEffect :: e z a
        -- ^ The original effect GADT originally lifted via
        -- a variant of 'Polysemy.Internal.send'.
        -- ^ @z@ is usually @Sem rInitial@, where @rInitial@ is the effect row
        -- that was in scope when this 'Weaving' was originally created.
-       , traverseState :: (Traversal t)
+       , traverseState :: !(Traversal t)
        -- ^ An implementation of 'traverse' for @t@.
-       , weaveInitState :: (forall x. x -> t x)
+       , weaveInitState :: !(forall x. x -> t x)
        -- ^ A piece of state that other effects' interpreters have already
        -- woven through this 'Weaving'.
-       , weaveDistrib :: (forall x. t (z x) -> m (t x))
+       , weaveDistrib :: !(forall x. t (z x) -> m (t x))
        -- ^ Distribute @t@ by transforming @z@ into @m@. This is
        -- usually of the form @t ('Polysemy.Sem' (Some ': Effects ': r) x) ->
        --   Sem r (t x)@
-       , weaveLowering :: (forall r x. Sem (Weave t r ': r) x -> Sem r (t x))
+       , weaveLowering :: !(forall r x. Sem (Weave t r ': r) x -> Sem r (t x))
        -- TODO document this
-       , weaveResult :: (t a -> resultType)
+       , weaveResult :: !(t a -> resultType)
        -- ^ Even though @t a@ is the moral resulting type of 'Weaving', we
        -- can't expose that fact; such a thing would prevent 'Polysemy.Sem'
        -- from being a 'Monad'.
@@ -381,11 +381,9 @@ fromSimpleHOEff w c = case w of
 hoist :: (∀ x. m x -> n x)
       -> Union r m a
       -> Union r n a
-hoist n' = \case
-  Union w (Sent e n) ->
-    Union w (Sent e (n' . n))
-  Union w (Weaved e trav mkS wv lwr ex) ->
-    Union w $ Weaved e trav mkS (n' . wv) lwr ex
+hoist n' (Union w wav) = Union w $ case wav of
+  Sent e n -> Sent e (n' . n)
+  Weaved e trav mkS wv lwr ex -> Weaved e trav mkS (n' . wv) lwr ex
 {-# INLINEABLE hoist #-}
 -- {-# INLINE hoist #-}
 
@@ -421,22 +419,20 @@ weave :: (Traversable t, forall x y. Coercible x y => Coercible (n x) (n y))
       -> (forall r' x. Sem (Weave t r' ': r') x -> Sem r' (t x))
       -> Union r m a
       -> Union r n (t a)
-weave s' wv' lwr' = \case
-  Union pr (Sent e n) ->
-    Union pr $ Weaved e (Traversal traverse) (<$ s') (wv' . fmap n) lwr' id
-  Union pr (Weaved e (Traversal trav) mkS wv lwr ex) ->
+weave s' wv' lwr' = \(Union pr wav) -> Union pr $ case wav of
+  Sent e n -> Weaved e (Traversal traverse) (<$ s') (wv' . fmap n) lwr' id
+  Weaved e (Traversal trav) mkS wv lwr ex ->
     let
       cTrav = Traversal (\f -> fmap Compose . traverse (trav f) .# getCompose)
       cEx = fmap ex .# getCompose
     in
-      Union pr $
-        Weaved
-          e
-          cTrav
-          (\x -> Compose $ mkS x <$ s')
-          (coerce #. wv' . fmap wv .# getCompose)
-          (fmap Compose #. lwr' . lwr . rewriteComposeWeave)
-          cEx
+      Weaved
+        e
+        cTrav
+        (\x -> Compose $ mkS x <$ s')
+        (coerce #. wv' . fmap wv .# getCompose)
+        (fmap Compose #. lwr' . lwr . rewriteComposeWeave)
+        cEx
 {-# INLINABLE weave #-}
 {-# SPECIALIZE INLINE
   weave :: Traversable t
@@ -521,7 +517,7 @@ injWeaving = Union membership
 send :: Member e r => e (Sem r) a -> Sem r a
 send = liftSem . inj
 -- {-# INLINE[3] send #-}
-{-# NOINLINE[3] send #-}
+{-# INLINEABLE[3] send #-}
 
 ------------------------------------------------------------------------------
 -- | Execute an action of an effect, given a natural transformation from
@@ -535,7 +531,7 @@ sendVia :: forall e z r a
         -> e z a -> Sem r a
 sendVia n = liftSem . injVia n
 -- {-# INLINE[3] sendVia #-}
-{-# NOINLINE[3] sendVia #-}
+{-# INLINEABLE[3] sendVia #-}
 
 ------------------------------------------------------------------------------
 -- | Embed an effect into a 'Sem', given an explicit proof
@@ -546,7 +542,7 @@ sendVia n = liftSem . injVia n
 sendUsing :: ElemOf e r -> e (Sem r) a -> Sem r a
 sendUsing pr = liftSem . injUsing pr
 -- {-# INLINE[3] sendUsing #-}
-{-# NOINLINE[3] sendUsing #-}
+{-# INLINEABLE[3] sendUsing #-}
 
 ------------------------------------------------------------------------------
 -- | Embed an effect into a 'Sem', given an explicit proof
@@ -555,7 +551,7 @@ sendUsing pr = liftSem . injUsing pr
 sendViaUsing :: ElemOf e r -> (forall x. z x -> Sem r x) -> e z a -> Sem r a
 sendViaUsing pr n = liftSem . injViaUsing pr n
 -- {-# INLINE[3] sendViaUsing #-}
-{-# NOINLINE[3] sendViaUsing #-}
+{-# INLINEABLE[3] sendViaUsing #-}
 
 
 ------------------------------------------------------------------------------
@@ -570,7 +566,7 @@ embed = send .# Embed
 ------------------------------------------------------------------------------
 -- | Create a 'Sem' from a 'Union' with matching stacks.
 liftSem :: Union r (Sem r) a -> Sem r a
-liftSem !u = Sem $ \k -> k u
+liftSem u = Sem $ \k -> k u
 {-# INLINEABLE liftSem #-}
 -- {-# INLINE liftSem #-}
 
@@ -597,10 +593,12 @@ data MatchThere e r where
 matchHere :: forall e r. ElemOf e r -> MatchHere e r
 matchHere (UnsafeMkElemOf 0) = unsafeCoerce $ MHYes
 matchHere _ = MHNo
+{-# INLINE matchHere #-}
 
 matchThere :: forall e r. ElemOf e r -> MatchThere e r
 matchThere (UnsafeMkElemOf 0) = MTNo
 matchThere (UnsafeMkElemOf e) = unsafeCoerce $ MTYes $ UnsafeMkElemOf $ e - 1
+{-# INLINE matchThere #-}
 
 absurdMembership :: ElemOf e '[] -> b
 absurdMembership !_ = errorWithoutStackTrace "bad use of UnsafeMkElemOf"
