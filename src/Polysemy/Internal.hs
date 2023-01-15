@@ -458,7 +458,7 @@ interpretFast :: forall e r. (∀ z x. e z x -> Sem r x) -> InterpreterFor e r
 interpretFast h = go
   where
     go :: InterpreterFor e r
-    go sem = Sem $ \k -> runSem sem $ \u c -> case decomp u of
+    go = throughSem $ \k u c -> case decomp u of
       Left g -> k (hoist go_ g) c
       Right wav -> fromFOEff wav $ \ex e -> runSem (h e) k (c . ex)
     {-# INLINE go #-}

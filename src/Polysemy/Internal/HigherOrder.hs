@@ -455,14 +455,14 @@ interpretH :: forall e r
 interpretH h = go
   where
     go :: forall a'. Sem (e ': r) a' -> Sem r a'
-    go (Sem sem) = Sem $ \k -> sem $ \u c -> case decomp u of
+    go = throughSem $ \k u c -> case decomp u of
       Left g -> k (hoist go_ g) c
       Right (Sent (e :: e z y) n) ->
         let
           goSent :: forall rC x
                   . Sem (HigherOrder z Identity e r rC ': rC) x
                  -> Sem rC x
-          goSent (Sem m) = Sem $ \k' -> m $ \u' c' -> case decomp u' of
+          goSent = throughSem $ \k' u' c' -> case decomp u' of
             Left g -> k' (hoist goSent_ g) c'
             Right wav -> fromFOEff wav $ \ex' -> \case
               GetInterpreterH -> c' $ ex' $ InterpreterH go_
@@ -490,7 +490,7 @@ interpretH h = go
             goWeaved :: forall rC x
                       . Sem (HigherOrder z (ViaTraversal s t) e r rC ': rC) x
                      -> Sem (Weave t rC ': rC) x
-            goWeaved (Sem m) = Sem $ \k' -> m $ \u' c' ->
+            goWeaved = throughSem $ \k' u' c' ->
               case decompCoerce u' of
                 Left g -> k' (hoist goWeaved_ g) c'
                 Right wav -> fromFOEff wav $ \ex' -> \case

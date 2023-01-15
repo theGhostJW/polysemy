@@ -20,23 +20,32 @@ import Polysemy.Internal.Core
 import Polysemy.Internal.Utils
 
 runWeaveState :: s -> Sem (Weave ((,) s) r ': r) a -> Sem r (s, a)
-runWeaveState s0 sem0 = Sem $ \k c0 ->
-  runSem sem0
-    (\u c s -> case decomp u of
-        Left g -> (`k` (\(s', x) -> c x s')) $
-          weave
-            (s, ())
-            (uncurry runWeaveState)
-            (runWeaveState s)
-            g
-        Right wav -> fromFOEff wav $ \ex -> \case
-          RestoreW (s', a) -> c (ex a) s'
-          GetStateW main -> c (ex (main ((,) s))) s
-          LiftWithW main -> c (ex (main (runWeaveState s))) s
-          EmbedW m -> runSem m k (\a -> c (ex a) s)
-    )
-    (\a s -> c0 (s, a))
-    s0
+runWeaveState s0' sem0' = go s0' sem0'
+  where
+    go :: s -> Sem (Weave ((,) s) r ': r) a -> Sem r (s, a)
+    go s0 sem0 = Sem $ \k c0 ->
+      runSem sem0
+        (\u c s -> case decomp u of
+            Left g -> (`k` (\(s', x) -> c x s')) $
+              weave
+                (s, ())
+                (uncurry go_)
+                (go_ s)
+                g
+            Right wav -> fromFOEff wav $ \ex -> \case
+              RestoreW (s', a) -> c (ex a) s'
+              GetStateW main -> c (ex (main ((,) s))) s
+              LiftWithW main -> c (ex (main (go_ s))) s
+              EmbedW m -> runSem m k (\a -> c (ex a) s)
+        )
+        (\a s -> c0 (s, a))
+        s0
+    {-# INLINE go #-}
+
+    go_ :: s -> Sem (Weave ((,) s) r ': r) a -> Sem r (s, a)
+    go_ = go
+    {-# NOINLINE go_ #-}
+{-# INLINEABLE runWeaveState #-}
 
 runWeaveLazyState :: s -> Sem (Weave (LazyT2 s) r ': r) a -> Sem r (LazyT2 s a)
 runWeaveLazyState s0 sem0 = Sem $ \k c0 ->
@@ -135,10 +144,9 @@ rewrite
 rewrite f = go
   where
     go :: forall x. Sem (e1 ': r) x -> Sem (e2 ': r) x
-    go (Sem m) = Sem $ \k -> m $ \u ->
-      k $ hoist go_ $ case decompCoerce u of
-        Left x -> x
-        Right wav -> Union Here (rewriteWeaving f wav)
+    go = hoistSem $ \u -> hoist go_ $ case decompCoerce u of
+      Left g -> g
+      Right wav -> Union Here $ rewriteWeaving f wav
     {-# INLINE go #-}
 
     go_ :: forall x. Sem (e1 ': r) x -> Sem (e2 ': r) x
@@ -170,10 +178,9 @@ transformUsing
 transformUsing pr f = go
   where
     go :: forall x. Sem (e1 ': r) x -> Sem r x
-    go (Sem m) = Sem $ \k -> m $ \u ->
-      k $ hoist go_ $ case decomp u of
-        Left g -> g
-        Right wav -> Union pr $ rewriteWeaving f wav
+    go = hoistSem $ \u -> hoist go_ $ case decomp u of
+      Left g -> g
+      Right wav -> Union pr $ rewriteWeaving f wav
     {-# INLINE go #-}
 
     go_ :: forall x. Sem (e1 ': r) x -> Sem r x

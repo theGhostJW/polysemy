@@ -217,7 +217,7 @@ throughSem
   -> (forall x. Sem r x -> Sem r' x)
 throughSem n = \sem -> Sem $ \k ->
   -- eta-expand k in order to oneShot it?
-  oneShot $ runSem sem $ \u c -> oneShot (n k u) c
+  oneShot $ runSem sem $ \u c -> oneShot (n (\u' -> oneShot (k u')) u) c
 {-# INLINE throughSem #-}
 
 ------------------------------------------------------------------------------
@@ -226,31 +226,38 @@ hoistSem
     :: (∀ x. Union r (Sem r) x -> Union r' (Sem r') x)
     -> Sem r a
     -> Sem r' a
-hoistSem n m = Sem $ \k -> runSem m (k . n)
+hoistSem n = \m -> Sem $ \k -> oneShot (runSem m (\x -> oneShot (k (n x))))
 {-# INLINE hoistSem #-}
 
 instance Functor (Sem f) where
-  fmap f m = Sem $ \k c -> runSem m k (c . f)
+  fmap f m = Sem $ \k c -> oneShot (runSem m k) (c . f)
   {-# INLINE fmap #-}
+
+  a <$ m = Sem $ \k c -> oneShot (runSem m k) (\_ -> c a)
+  {-# INLINE (<$) #-}
 
 instance Applicative (Sem f) where
   pure a = Sem $ \_ c -> c a
   {-# INLINE pure #-}
 
-  ma <*> mb = Sem $ \k c -> runSem ma k (\f -> runSem mb k (c . f))
+  ma <*> mb = Sem $ \k c ->
+    oneShot (runSem ma k) (\f -> oneShot (runSem mb k) (c . f))
   {-# INLINE (<*>) #-}
 
-  liftA2 f ma mb = Sem $ \k c -> runSem ma k (\a -> runSem mb k (c . f a))
+  liftA2 f ma mb = Sem $ \k c ->
+    oneShot (runSem ma k) (\a -> oneShot (runSem mb k) (c . f a))
   {-# INLINE liftA2 #-}
 
-  ma <* mb = Sem $ \k c -> runSem ma k (\a -> runSem mb k (\_ -> c a))
+  ma <* mb = Sem $ \k c ->
+    oneShot (runSem ma k) (\a -> oneShot (runSem mb k) (\_ -> c a))
   {-# INLINE (<*) #-}
 
-  ma *> mb = Sem $ \k c -> runSem ma k (\_ -> runSem mb k c)
+  ma *> mb = Sem $ \k c -> oneShot (runSem ma k) (\_ -> oneShot (runSem mb k) c)
   {-# INLINE (*>) #-}
 
 instance Monad (Sem f) where
-  ma >>= f = Sem $ \k c -> runSem ma k (\a -> runSem (f a) k c)
+  ma >>= f = Sem $ \k c ->
+    oneShot (runSem ma k) (\a -> oneShot (runSem (f a) k) c)
   {-# INLINE (>>=) #-}
 
 
@@ -371,8 +378,8 @@ fromFOEff :: Weaving e m a
           -> (forall z b. (b -> a) -> e z b -> res)
           -> res
 fromFOEff w c = case w of
-  Sent e _ -> c id e
-  Weaved e _ mkS _ _ ex -> c (ex . mkS) e
+  Sent e _ -> oneShot c id e
+  Weaved e _ mkS _ _ ex -> oneShot c (ex . mkS) e
 {-# INLINEABLE fromFOEff #-}
 -- {-# INLINE fromFOEff #-}
 
@@ -386,8 +393,8 @@ fromSimpleHOEff :: Weaving e (Sem r) a
                    )
                 -> res
 fromSimpleHOEff w c = case w of
-  Sent e n -> c Identity (fmap Identity #. n) runIdentity e
-  Weaved e _ mkS wv _ ex -> c mkS (wv . mkS) ex e
+  Sent e n -> oneShot (c Identity (fmap Identity #. n)) runIdentity e
+  Weaved e _ mkS wv _ ex -> oneShot (c mkS (wv . mkS)) ex e
 {-# INLINEABLE fromSimpleHOEff #-}
 -- {-# INLINE fromSimpleHOEff #-}
 
@@ -402,27 +409,32 @@ hoist n' (Union w wav) = Union w $ case wav of
 
 rewriteComposeWeave :: Sem (Weave (Compose t t') r ': r) x
                     -> Sem (Weave t' (Weave t r ': r) ': Weave t r ': r) x
-rewriteComposeWeave sem = Sem $ \k -> runSem sem $ \u c -> case u of
-  Union Here wav -> fromFOEff wav $ \ex -> \case
-    RestoreW (Compose tt') ->
-      k (injUsing (There Here) (RestoreW tt')) \t' ->
-      k (injUsing Here (RestoreW t')) (c . ex)
-    GetStateW main ->
-      (`k` id) $ injUsing (There Here) $ GetStateW $ \mkS ->
-      (`k` c) $ injUsing Here $ GetStateW $ \mkS' ->
-      ex $ main $ Compose #. mkS . mkS'
-    LiftWithW main ->
-      (`k` id) $ injUsing (There Here) $ LiftWithW \lwr ->
-      (`k` c) $ injUsing Here $ LiftWithW $ \lwr' ->
-      ex $ main (fmap Compose #. lwr . lwr' . go)
-    EmbedW m ->
-      k (injUsing Here (EmbedW (sendUsing Here (EmbedW m)))) (c . ex)
-  Union (There pr) wav -> k (hoist go (Union (There (There pr)) wav)) c
+rewriteComposeWeave = go
   where
     go :: Sem (Weave (Compose t t') r ': r) x
        -> Sem (Weave t' (Weave t r ': r) ': Weave t r ': r) x
-    go = rewriteComposeWeave
-    {-# NOINLINE go #-}
+    go = throughSem $ \k u c -> case u of
+      Union Here wav -> fromFOEff wav $ \ex -> \case
+        RestoreW (Compose tt') ->
+          k (injUsing (There Here) (RestoreW tt')) \t' ->
+          k (injUsing Here (RestoreW t')) (c . ex)
+        GetStateW main ->
+          (`k` id) $ injUsing (There Here) $ GetStateW $ \mkS ->
+          (`k` c) $ injUsing Here $ GetStateW $ \mkS' ->
+          ex $ main $ Compose #. mkS . mkS'
+        LiftWithW main ->
+          (`k` id) $ injUsing (There Here) $ LiftWithW \lwr ->
+          (`k` c) $ injUsing Here $ LiftWithW $ \lwr' ->
+          ex $ main (fmap Compose #. lwr . lwr' . go_)
+        EmbedW m ->
+          k (injUsing Here (EmbedW (sendUsing Here (EmbedW m)))) (c . ex)
+      Union (There pr) wav -> k (hoist go_ (Union (There (There pr)) wav)) c
+    {-# INLINE go #-}
+
+    go_ :: Sem (Weave (Compose t t') r ': r) x
+        -> Sem (Weave t' (Weave t r ': r) ': Weave t r ': r) x
+    go_ = go
+    {-# NOINLINE go_ #-}
 {-# INLINEABLE rewriteComposeWeave #-}
 -- {-# INLINE rewriteComposeWeave #-}
 
