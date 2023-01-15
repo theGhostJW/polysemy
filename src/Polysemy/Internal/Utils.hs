@@ -31,3 +31,8 @@ infixl 8 .#
 (.#) :: forall a b c. Coercible a b => (b -> c) -> (a -> b) -> (a -> c)
 (.#) bc _ = coerce bc
 {-# INLINE (.#) #-}
+
+infixl 1 &#
+(&#) :: forall a b. Coercible a b => a -> (a -> b) -> b
+(&#) a _ = coerce a
+{-# INLINE (&#) #-}

@@ -20,21 +20,10 @@ module Polysemy.Bundle
 
 import Polysemy
 import Polysemy.Internal
+import Polysemy.Internal.Core
 import Polysemy.Internal.Union
 import Polysemy.Internal.Bundle (simpleSubsumeMembership)
 import Polysemy.Internal.Sing
-
-------------------------------------------------------------------------------
--- | An effect for collecting multiple effects into one effect.
---
--- Useful for effect newtypes -- effects defined through creating a newtype
--- over an existing effect, and then defining actions and interpretations on
--- the newtype by using 'rewrite' and 'transform'.
---
--- By making a newtype of 'Bundle', it's possible to wrap multiple effects in
--- one newtype.
-data Bundle r m a where
-  Bundle :: ElemOf e r -> e m a -> Bundle r m a
 
 ------------------------------------------------------------------------------
 -- | Injects an effect into a 'Bundle'. Useful together with 'transform'.

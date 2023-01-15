@@ -42,6 +42,7 @@ import Polysemy.Internal.Opaque
 import Polysemy.Internal.NonDet
 import Polysemy.Internal.Utils
 import Unsafe.Coerce
+import GHC.Exts (oneShot, considerAccessible)
 
 -- $setup
 -- >>> import Data.Function
@@ -206,6 +207,18 @@ usingSem
     -> res
 usingSem c k m = runSem m k c
 {-# INLINE usingSem #-}
+
+throughSem
+  :: forall r' r
+   . (  forall res y
+      . (∀ x. Union r' (Sem r') x -> (x -> res) -> res)
+     -> Union r (Sem r) y -> (y -> res) -> res
+     )
+  -> (forall x. Sem r x -> Sem r' x)
+throughSem n = \sem -> Sem $ \k ->
+  -- eta-expand k in order to oneShot it?
+  oneShot $ runSem sem $ \u c -> oneShot (n k u) c
+{-# INLINE throughSem #-}
 
 ------------------------------------------------------------------------------
 -- | Extend the stack of a 'Sem' with an explicit 'Union' transformation.
@@ -450,6 +463,28 @@ rewriteWeaving t = \case
   Sent e n -> Sent (t e) n
   Weaved e trav mkS wv lwr ex -> Weaved (t e) trav mkS wv lwr ex
 {-# INLINEABLE rewriteWeaving #-}
+
+------------------------------------------------------------------------------
+-- | An effect for collecting multiple effects into one effect.
+--
+-- Useful for effect newtypes -- effects defined through creating a newtype
+-- over an existing effect, and then defining actions and interpretations on
+-- the newtype by using 'Polysemy.rewrite' and 'Polysemy.transform'.
+--
+-- By making a newtype of 'Polysemy.Bundle.Bundle', it's possible to wrap
+-- multiple effects in one newtype.
+data Bundle r m a where
+  Bundle :: {-# UNPACK #-} !(ElemOf e r) -> e m a -> Bundle r m a
+
+rewriteWeaving' :: (∀ z x. e z x -> Bundle r z x)
+                -> Weaving e m a
+                -> Union r m a
+rewriteWeaving' t = \case
+  Sent e n
+    | Bundle pr e' <- t e -> Union pr (Sent e' n)
+  Weaved e trav mkS wv lwr ex
+    | Bundle pr e' <- t e -> Union pr (Weaved e' trav mkS wv lwr ex)
+{-# INLINEABLE rewriteWeaving' #-}
 -- {-# INLINE rewriteWeaving #-}
 
 ------------------------------------------------------------------------------
@@ -566,7 +601,7 @@ embed = send .# Embed
 ------------------------------------------------------------------------------
 -- | Create a 'Sem' from a 'Union' with matching stacks.
 liftSem :: Union r (Sem r) a -> Sem r a
-liftSem u = Sem $ \k -> k u
+liftSem u = Sem $ \k -> oneShot (k u) -- Eta-expansion for better inlining
 {-# INLINEABLE liftSem #-}
 -- {-# INLINE liftSem #-}
 
@@ -601,7 +636,8 @@ matchThere (UnsafeMkElemOf e) = unsafeCoerce $ MTYes $ UnsafeMkElemOf $ e - 1
 {-# INLINE matchThere #-}
 
 absurdMembership :: ElemOf e '[] -> b
-absurdMembership !_ = errorWithoutStackTrace "bad use of UnsafeMkElemOf"
+absurdMembership !_
+  | considerAccessible = errorWithoutStackTrace "bad use of UnsafeMkElemOf"
 
 pattern Here :: () => ((e ': r') ~ r) => ElemOf e r
 pattern Here <- (matchHere -> MHYes)

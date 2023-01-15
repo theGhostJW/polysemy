@@ -258,5 +258,5 @@ decompCoerce
 decompCoerce (Union p a) =
   case p of
     Here  -> Right a
-    There pr -> Left (Union (There pr) a)
+    There pr -> Left $! Union (There pr) a
 {-# INLINABLE decompCoerce #-}

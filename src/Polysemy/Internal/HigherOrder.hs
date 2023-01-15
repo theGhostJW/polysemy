@@ -79,14 +79,14 @@ data TypeParamsH
       (rH :: EffectRow)
       (rC :: EffectRow) = TypeParamsH
 
--- | A trivial action just returning the 'TypeParamsH' singleton, with
+-- | A trivial action just returning the 'TypeParamsH' proxy, with
 -- type parameters matching that of the current 'HigherOrder' environment.
 --
 -- You can use this together with @ScopedTypeVariables@ to gain access to the
 -- various parameters of the 'HigherOrder' if you need them.
 getTypeParamsH :: forall z t e rH rC r
-                    . Sem (HigherOrder z t e rH rC ': r)
-                          (TypeParamsH z t e rH rC)
+                . Sem (HigherOrder z t e rH rC ': r)
+                      (TypeParamsH z t e rH rC)
 getTypeParamsH = return TypeParamsH
 {-# INLINE getTypeParamsH #-}
 
@@ -104,6 +104,7 @@ propagate :: forall e r z t eH rH rC a
           => e z a
           -> Sem (HigherOrder z t eH rH rC ': r) a
 propagate = propagateUsing membership
+{-# INLINE propagate #-}
 
 -- | Propagate an effect action where the higher-order chunks are of the same
 -- monad @z@ as that used by the effect currently being handled, given an
@@ -117,6 +118,13 @@ propagateUsing pr e = do
   InterpreterH interp <- getInterpreterH
   ProcessorH prcs   <- getProcessorH
   sendUsing Here $ PropagateH pr e (\ex t -> raise_ $ interp $ prcs t ex)
+{-# INLINEABLE propagateUsing #-}
+{-# SPECIALIZE INLINE
+  propagateUsing
+    :: ElemOf e rH
+    -> e z a
+    -> Sem (HigherOrder z t eH rH rH ': r) a
+  #-}
 
 
 -- | Embed a @'Sem' rC@ action, where @rC@ is the effect row that
@@ -140,6 +148,7 @@ propagateUsing pr e = do
 embedH :: forall r z t eH rH rC a
         . Sem rC a -> Sem (HigherOrder z t eH rH rC ': r) a
 embedH = sendUsing Here . EmbedH
+{-# INLINEABLE embedH #-}
 
 -- | Run a monadic action given by a higher-order effect that is currently
 -- being interpreted, and recursively apply the current interpreter on it.
@@ -164,6 +173,12 @@ runH :: forall r z t e rH rC a
      => z a
      -> Sem (HigherOrder z t e rH rC ': r) a
 runH = runExposeH >=> restoreH
+{-# INLINEABLE runH #-}
+{-# SPECIALIZE INLINE
+  runH
+    :: z a
+    -> Sem (HigherOrder z t e rH rH ': r) a
+  #-}
 
 -- | Run a monadic action given by a higher-order effect that is currently
 -- being interpreted, and apply an interpreter for the interpreted effect
@@ -183,6 +198,7 @@ runH' :: forall r z t e rH rC a b
        . (Sem (e ': rH) (t a) -> Sem rC (t b))
       -> z a -> Sem (HigherOrder z t e rH rC ': r) b
 runH' interp = runExposeH' interp >=> restoreH
+{-# INLINEABLE runH' #-}
 
 -- | Locally gain access to lowering function that can transform
 -- @'Polysemy.Sem' ('Polysemy.Interpretation.HigherOrder' z t ... ': r) x@ to
@@ -199,6 +215,7 @@ liftWithH :: forall r z t e rH rC a
               -> Sem rC a)
           -> Sem (HigherOrder z t e rH rC ': r) a
 liftWithH main = sendUsing Here (LiftWithH main) >>= embedH
+{-# INLINEABLE liftWithH #-}
 
 -- | A particularly useful composition:
 -- @'controlH' h = 'liftWithH' h >>= 'restoreH'@
@@ -214,6 +231,7 @@ controlH :: forall r z t e rH rC a
              -> Sem rC (t a))
          -> Sem (HigherOrder z t e rH rC ': r) a
 controlH main = liftWithH main >>= restoreH
+{-# INLINEABLE controlH #-}
 
 -- | Run a monadic action given by a higher-order effect that is currently
 -- being interpreted, recursively apply the current interpreter on it,
@@ -239,6 +257,10 @@ runExposeH :: forall r z t e rH rC a
 runExposeH z = do
   InterpreterH interp <- getInterpreterH
   runExposeH' (raise_ . interp) z
+{-# INLINEABLE runExposeH #-}
+{-# SPECIALIZE INLINE
+  runExposeH :: z a -> Sem (HigherOrder z t e rH rH ': r) (t a)
+  #-}
 
 -- | Run a monadic action given by a higher-order effect that is currently
 -- being interpreted, and reify the effectful state of all local effects
@@ -256,6 +278,7 @@ runExposeH' :: forall r z t e rH rC a b
             -> z a
             -> Sem (HigherOrder z t e rH rC ': r) b
 runExposeH' interp = processH >=> embedH . interp
+{-# INLINEABLE runExposeH' #-}
 
 -- | Restore a reified effectful state, bringing its changes into scope, and
 -- returning the result of the computation.
@@ -292,6 +315,7 @@ runExposeH' interp = processH >=> embedH . interp
 restoreH :: forall r z t e rH rC a
           . t a -> Sem (HigherOrder z t e rH rC ': r) a
 restoreH = sendUsing Here . RestoreH
+{-# INLINEABLE restoreH #-}
 
 -- | Reify the effectful state of the local effects of the argument.
 --
@@ -302,6 +326,7 @@ exposeH :: forall z t e rH rC a
          . Sem (HigherOrder z t e rH rC ': rC) a
         -> Sem (HigherOrder z t e rH rC ': rC) (t a)
 exposeH m = liftWithH $ \lower -> lower m
+{-# INLINEABLE exposeH #-}
 
 -- | Get the local effectful state as it is currently.
 --
@@ -309,6 +334,7 @@ exposeH m = liftWithH $ \lower -> lower m
 getStateH :: forall r z t e rH rC
            . Sem (HigherOrder z t e rH rC ': r) (t ())
 getStateH = sendUsing Here GetStateH
+{-# INLINEABLE getStateH #-}
 
 -- | Process a monadic action given by the higher-order effect that is currently
 -- being interpreted by turning it into a @'Sem' (e ': rH)@ action that
@@ -325,6 +351,7 @@ processH z = do
   s <- getStateH
   ProcessorH prcs <- getProcessorH
   return $ prcs s (\_ -> z)
+{-# INLINEABLE processH #-}
 
 -- | Locally gain access to a processor: a function that transforms a monadic
 -- action given by the higher-order effect that is currently being interpreted
@@ -342,6 +369,7 @@ withProcessorH main = do
   s <- getStateH
   ProcessorH prcs <- getProcessorH
   embedH $ main (\z -> prcs s (\_ -> z))
+{-# INLINEABLE withProcessorH #-}
 
 -- | A particularly useful composition:
 -- @'controlWithProcessorH' h = 'withProcessorH' h >>= 'restoreH'@
@@ -354,13 +382,14 @@ controlWithProcessorH :: forall r z t e rH rC a
                           -> Sem rC (t a))
                       -> Sem (HigherOrder z t e rH rC ': r) a
 controlWithProcessorH main = withProcessorH main >>= restoreH
+{-# INLINEABLE controlWithProcessorH #-}
 
 -- | Retrieve a 'InterpreterH': the interpreter currently being defined
 getInterpreterH :: forall z t e rH rC r
                  . Sem (HigherOrder z t e rH rC ': r)
                        (InterpreterH e rH)
 getInterpreterH = sendUsing Here GetInterpreterH
-
+{-# INLINEABLE getInterpreterH #-}
 
 newtype ProcessorH z t e r =
   ProcessorH (forall x y. t x -> (x -> z y) -> Sem (e ': r) (t y))
@@ -385,6 +414,7 @@ newtype ProcessorH z t e r =
 -- @
 getProcessorH :: Sem (HigherOrder z t e rH rC ': r) (ProcessorH z t e rH)
 getProcessorH = sendUsing Here GetProcessorH
+{-# INLINEABLE getProcessorH #-}
 
 -- | A handler for a higher-order effect @e@, working with the effect stack
 -- @rH@.
@@ -426,7 +456,7 @@ interpretH h = go
   where
     go :: forall a'. Sem (e ': r) a' -> Sem r a'
     go (Sem sem) = Sem $ \k -> sem $ \u c -> case decomp u of
-      Left g -> k (hoist go g) c
+      Left g -> k (hoist go_ g) c
       Right (Sent (e :: e z y) n) ->
         let
           goSent :: forall rC x
@@ -435,7 +465,7 @@ interpretH h = go
           goSent (Sem m) = Sem $ \k' -> m $ \u' c' -> case decomp u' of
             Left g -> k' (hoist goSent_ g) c'
             Right wav -> fromFOEff wav $ \ex' -> \case
-              GetInterpreterH -> c' $ ex' $ InterpreterH go
+              GetInterpreterH -> c' $ ex' $ InterpreterH go_
               GetProcessorH -> c' $ ex' $
                 ProcessorH (\(Identity t) fz -> (fmap Identity #. n . fz) t)
               RestoreH (Identity a) -> c' $ ex' a
@@ -464,7 +494,7 @@ interpretH h = go
               case decompCoerce u' of
                 Left g -> k' (hoist goWeaved_ g) c'
                 Right wav -> fromFOEff wav $ \ex' -> \case
-                  GetInterpreterH -> c' $ ex' $ InterpreterH go
+                  GetInterpreterH -> c' $ ex' $ InterpreterH go_
                   GetProcessorH ->
                       c' $ ex' $ ProcessorH $ \t fz ->
                         (fmap ViaTraversal #. wv .# getViaTraversal) (fmap fz t)
@@ -496,6 +526,12 @@ interpretH h = go
             {-# NOINLINE goWeaved_ #-}
           in
             runSem (lwr (goWeaved (h e))) k (c . ex)
+    {-# INLINE go #-}
+
+    go_ :: forall a'. Sem (e ': r) a' -> Sem r a'
+    go_ = go
+    {-# NOINLINE go_ #-}
+{-# INLINEABLE interpretH #-}
 
 ------------------------------------------------------------------------------
 -- | A generalization of 'interpretH', 'reinterpretH', 'reinterpret2H', etc.:

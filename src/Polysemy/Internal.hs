@@ -39,6 +39,7 @@ module Polysemy.Internal
   , Embed (..)
   , usingSem
   , liftSem
+  , throughSem
   , hoistSem
   , mapMembership
   , Append
