@@ -21,6 +21,7 @@ import Polysemy.Internal.Utils
 import Polysemy.Internal.Scoped
 import Polysemy.Internal.Core
 import Polysemy.Internal
+import Polysemy.Internal.Union
 
 runScoped :: forall eff param r
            . (   forall q x
@@ -33,11 +34,11 @@ runScoped interp =
     Run w _ ->
       errorWithoutStackTrace ("unhandled ScopedRun of depth " ++ show w)
   . go 0
-  . raiseUnder
   where
-    go :: Word
-       -> InterpreterFor (Scoped eff param) (Run eff ': r)
-    go depth sem = Sem $ \k -> runSem sem $ \u c -> case decomp u of
+    go :: forall x
+        . Word
+       -> Sem (Scoped eff param ': r) x -> Sem (Run eff ': r) x
+    go depth sem = Sem $ \k -> runSem sem $ \u c -> case decompCoerce u of
       Left g -> k (hoist (go_ depth) g) c
       Right wav -> case wav of
         Sent (Scoped p m) n ->
@@ -61,8 +62,9 @@ runScoped interp =
         !depth' = depth + 1
     {-# INLINE go #-}
 
-    go_ :: Word
-        -> InterpreterFor (Scoped eff param) (Run eff ': r)
+    go_ :: forall x
+         . Word
+        -> Sem (Scoped eff param ': r) x -> Sem (Run eff ': r) x
     go_ = go
     {-# NOINLINE go_ #-}
 
