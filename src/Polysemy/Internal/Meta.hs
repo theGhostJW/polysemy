@@ -375,10 +375,9 @@ interpretMeta h =
         errorWithoutStackTrace $
           "Unhandled MetaRun with unique hash " ++ show (hashUnique q)
   . go
-  . raiseUnder
   where
-    go :: InterpreterFor (Meta metaeff) (MetaRun ': r)
-    go = throughSem $ \k u c -> case decomp u of
+    go :: forall x. Sem (Meta metaeff ': r) x -> Sem (MetaRun ': r) x
+    go = throughSem $ \k u c -> case decompCoerce u of
       Left g -> k (hoist go_ g) c
       Right (Sent (MetaMetaRun metarun) n) ->
         k (Union Here $ Sent metarun (go_ . n)) c
@@ -387,7 +386,7 @@ interpretMeta h =
       Right (Sent (SendMeta (metaeff :: metaeff l z _x) to1 to2) n) ->
         let
           handleHandlingMetaSpecific
-            :: forall q x. HandlingMeta metaeff Identity r l q x -> x
+            :: forall q y. HandlingMeta metaeff Identity r l q y -> y
           handleHandlingMetaSpecific = \case
             ProcessMeta pr (Identity x) ex -> do
               uniq <- newUniqueSem
@@ -399,18 +398,18 @@ interpretMeta h =
             ProcessMeta' pr (Identity x) ex -> do
               uniq <- newUniqueSem
               n (to2 uniq pr (ex x))
-                & metaRunIntoHandlingMeta
+                & metaIntoHandlingMeta
                 & exposeMetaRun (There Here) uniq
                 &# fmap Identity
             _ -> errorWithoutStackTrace
                   "handleHandlingMetaSpecific: not specially handled "
           {-# INLINE handleHandlingMetaSpecific #-}
 
-          goSent :: forall rC x mh
+          goSent :: forall rC y mh
                   . mh ~ HandlingMeta metaeff Identity r l
                  => Sem (HigherOrder z Identity (Meta metaeff)
-                          (mh ': r) rC ': rC) x
-                 -> Sem rC x
+                          (mh ': r) rC ': rC) y
+                 -> Sem rC y
           goSent = throughSem $ \k' u' c' -> case decomp u' of
             Right wav -> fromFOEff wav $ \ex' -> \case
               GetInterpreterH -> c' $ ex' $
@@ -430,11 +429,11 @@ interpretMeta h =
             Left g -> k' (hoist goSent_ g) c'
           {-# INLINE goSent #-}
 
-          goSent_ :: forall rC x mh
+          goSent_ :: forall rC y mh
                    . mh ~ HandlingMeta metaeff Identity r l
                   => Sem (HigherOrder z Identity (Meta metaeff)
-                           (mh ': r) rC ': rC) x
-                  -> Sem rC x
+                           (mh ': r) rC ': rC) y
+                  -> Sem rC y
           goSent_ = goSent
           {-# NOINLINE goSent_ #-}
 
@@ -446,8 +445,8 @@ interpretMeta h =
         reify trav $ \(_ :: pr s) ->
           let
             handleHandlingMetaSpecific
-              :: forall q x
-               . HandlingMeta metaeff (ViaTraversal s t) r l q x -> x
+              :: forall q y
+               . HandlingMeta metaeff (ViaTraversal s t) r l q y -> y
             handleHandlingMetaSpecific = \case
               ProcessMeta pr t ex' -> do
                 uniq <- newUniqueSem
@@ -459,18 +458,18 @@ interpretMeta h =
               ProcessMeta' pr t ex' -> do
                 uniq <- newUniqueSem
                 wv (getViaTraversal (fmap (to2 uniq pr . ex') t))
-                  & metaRunIntoHandlingMeta
+                  & metaIntoHandlingMeta
                   & exposeMetaRun (There Here) uniq
                   &# fmap ViaTraversal
               _ -> errorWithoutStackTrace
                     "handleHandlingMetaSpecific: not specially handled "
             {-# INLINE handleHandlingMetaSpecific #-}
 
-            goWeaved :: forall rC x mh
+            goWeaved :: forall rC y mh
                     . mh ~ HandlingMeta metaeff (ViaTraversal s t) r l
                    => Sem (HigherOrder z (ViaTraversal s t) (Meta metaeff)
-                            (mh ': r) rC ': rC) x
-                   -> Sem (Weave t rC ': rC) x
+                            (mh ': r) rC ': rC) y
+                   -> Sem (Weave t rC ': rC) y
             goWeaved = throughSem $ \k' u' c' -> case decompCoerce u' of
               Right wav -> fromFOEff wav $ \ex' -> \case
                 GetInterpreterH -> c' $ ex' $
@@ -505,11 +504,11 @@ interpretMeta h =
               Left g -> k' (hoist goWeaved_ g) c'
             {-# INLINE goWeaved #-}
 
-            goWeaved_ :: forall rC x mh
+            goWeaved_ :: forall rC y mh
                        . mh ~ HandlingMeta metaeff (ViaTraversal s t) r l
                       => Sem (HigherOrder z (ViaTraversal s t) (Meta metaeff)
-                               (mh ': r) rC ': rC) x
-                      -> Sem (Weave t rC ': rC) x
+                               (mh ': r) rC ': rC) y
+                      -> Sem (Weave t rC ': rC) y
             goWeaved_ = goWeaved
             {-# NOINLINE goWeaved_ #-}
           in
@@ -517,40 +516,38 @@ interpretMeta h =
                       (lwr (goWeaved (h metaeff)))) k (c . ex)
     {-# INLINE go #-}
 
-    go_ :: InterpreterFor (Meta metaeff) (MetaRun ': r)
+    go_ :: forall x. Sem (Meta metaeff ': r) x -> Sem (MetaRun ': r) x
     go_ = go
     {-# NOINLINE go_ #-}
 
-    metaRunIntoHandlingMeta
-      :: forall meta t r' l y
-       . Sem (meta ': MetaRun ': r') y
-      -> Sem (meta ': HandlingMeta metaeff t r l ': r') y
-    metaRunIntoHandlingMeta = throughSem $ \k (Union pr wav) c ->
-      case pr of
-        Here -> k (hoist metaRunIntoHandlingMeta_ (Union Here wav)) c
-        There Here ->
-          k (hoist metaRunIntoHandlingMeta_
-              (Union (There Here) (rewriteWeaving HandlingMetaMetaRun wav))) c
-        There (There pr') ->
-          k (hoist metaRunIntoHandlingMeta_ (Union (There (There pr')) wav)) c
-    {-# INLINE metaRunIntoHandlingMeta #-}
+    metaIntoHandlingMeta
+      :: forall t r' l y
+       . Sem (Meta metaeff ': r') y
+      -> Sem (Meta metaeff ': HandlingMeta metaeff t r l ': r') y
+    metaIntoHandlingMeta = hoistSem \(Union pr wav) ->
+      hoist metaIntoHandlingMeta_ $ case pr of
+        Here -> wav & rewriteWeaving' \case
+          MetaMetaRun metarun ->
+            Bundle (There Here) (HandlingMetaMetaRun metarun)
+          other -> Bundle Here other
+        There pr' -> Union (There (There pr')) wav
+    {-# INLINE metaIntoHandlingMeta #-}
 
-    metaRunIntoHandlingMeta_
-      :: forall meta t r' l y
-       . Sem (meta ': MetaRun ': r') y
-      -> Sem (meta ': HandlingMeta metaeff t r l ': r') y
-    metaRunIntoHandlingMeta_ = metaRunIntoHandlingMeta
-    {-# NOINLINE metaRunIntoHandlingMeta_#-}
-
+    metaIntoHandlingMeta_
+      :: forall t r' l y
+       . Sem (Meta metaeff ': r') y
+      -> Sem (Meta metaeff ': HandlingMeta metaeff t r l ': r') y
+    metaIntoHandlingMeta_ = metaIntoHandlingMeta
+    {-# NOINLINE metaIntoHandlingMeta_ #-}
 
     metaToHandlingMeta
       :: forall t r' l y
-       . Sem (Meta metaeff ': MetaRun ': r') y
+       . Sem (Meta metaeff ': r') y
       -> Sem (Meta metaeff ': HandlingMeta metaeff t r l ': r') y
     metaToHandlingMeta = goMTHM
       where
         goMTHM :: forall y'
-                . Sem (Meta metaeff ': MetaRun ': r') y'
+                . Sem (Meta metaeff ': r') y'
                -> Sem (Meta metaeff ': HandlingMeta metaeff t r l ': r') y'
         goMTHM = throughSem $ \k u c -> case u of
           Union Here (Sent (MetaMetaRun metarun) n) ->
@@ -561,52 +558,45 @@ interpretMeta h =
                 (Weaved (HandlingMetaMetaRun metarun)
                   trav mkS (goMTHM . wv) lwr ex)) c
           Union Here wav -> k (hoist goMTHM_ (Union Here wav)) c
-          Union (There Here) (Sent metarun n) ->
-            k (Union (There Here)
-                (Sent (HandlingMetaMetaRun metarun) (goMTHM_ . n))) c
-          Union (There Here) (Weaved metarun trav mkS wv lwr ex) ->
-            k (Union (There Here)
-                (Weaved (HandlingMetaMetaRun metarun)
-                  trav mkS (goMTHM_ . wv) lwr ex)) c
-          Union (There (There pr)) wav ->
+          Union (There pr) wav ->
             k (hoist goMTHM_ (Union (There (There pr)) wav)) c
         {-# INLINE goMTHM #-}
 
         goMTHM_ :: forall y'
-                . Sem (Meta metaeff ': MetaRun ': r') y'
+                . Sem (Meta metaeff ': r') y'
                -> Sem (Meta metaeff ': HandlingMeta metaeff t r l ': r') y'
         goMTHM_ = goMTHM
         {-# NOINLINE goMTHM_ #-}
     {-# INLINE metaToHandlingMeta #-}
 
     handlingMetaToMeta
-      :: forall t meta r' l x
+      :: forall t r' l x
        . (forall q y. HandlingMeta metaeff t r l q y -> y)
-      -> Sem (meta ': HandlingMeta metaeff t r l ': r') x
-      -> Sem (meta ': MetaRun ': r') x
+      -> Sem (Meta metaeff ': HandlingMeta metaeff t r l ': r') x
+      -> Sem (Meta metaeff ': r') x
     handlingMetaToMeta specific = goHMTM
       where
         goHMTM :: forall y
-                . Sem (meta ': HandlingMeta metaeff t r l ': r') y
-               -> Sem (meta ': MetaRun ': r') y
+                . Sem (Meta metaeff ': HandlingMeta metaeff t r l ': r') y
+               -> Sem (Meta metaeff ': r') y
         goHMTM = throughSem $ \k u c ->
           case u of
             Union Here wav -> k (hoist goHMTM_ (Union Here wav)) c
             Union (There Here) wav -> case wav of
               Sent (HandlingMetaMetaRun metarun) n ->
-                k (Union (There Here) (Sent metarun (goHMTM_ . n))) c
+                k (Union Here (Sent (MetaMetaRun metarun) (goHMTM_ . n))) c
               Weaved (HandlingMetaMetaRun metarun) trav mkS wv lwr ex ->
-                k (Union (There Here) (Weaved metarun
+                k (Union Here (Weaved (MetaMetaRun metarun)
                                 trav mkS (goHMTM_ . wv) lwr ex)) c
               _ -> fromFOEff wav $ \ex e ->
                 let !x' = specific e in c (ex x')
             Union (There (There pr)) wav ->
-              k (hoist goHMTM_ (Union (There (There pr)) wav)) c
+              k (hoist goHMTM_ (Union (There pr) wav)) c
         {-# INLINE goHMTM #-}
 
         goHMTM_ :: forall y
-                 . Sem (meta ': HandlingMeta metaeff t r l ': r') y
-                -> Sem (meta ': MetaRun ': r') y
+                 . Sem (Meta metaeff ': HandlingMeta metaeff t r l ': r') y
+                -> Sem (Meta metaeff ': r') y
         goHMTM_ = goHMTM
         {-# NOINLINE goHMTM_ #-}
     {-# INLINE handlingMetaToMeta #-}

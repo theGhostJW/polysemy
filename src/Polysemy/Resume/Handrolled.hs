@@ -56,7 +56,6 @@ runResumableBase interp =
                       . either (mkS . Left)
                                (runIdentity #. trav (Identity #. Right)))
                       k
-          -- & usingSem (c . either (ex . mkS . Left) ex) k
         Sent (ResumableRun r) n -> k (Union Here (Sent r (go_ depth . n))) c
         Weaved (ResumableRun r) trav mkS wv lwr ex ->
           k (Union Here (Weaved r trav mkS (go_ depth . wv) lwr ex)) c
