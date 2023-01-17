@@ -42,7 +42,7 @@ import Polysemy.Internal.Opaque
 import Polysemy.Internal.NonDet
 import Polysemy.Internal.Utils
 import Unsafe.Coerce
-import GHC.Exts (oneShot, considerAccessible)
+import GHC.Exts (considerAccessible)
 
 -- $setup
 -- >>> import Data.Function
@@ -604,7 +604,7 @@ embed = send .# Embed
 ------------------------------------------------------------------------------
 -- | Create a 'Sem' from a 'Union' with matching stacks.
 liftSem :: Union r (Sem r) a -> Sem r a
-liftSem u = Sem $ \k -> oneShot (k u) -- Eta-expansion for better inlining
+liftSem u = Sem $ \k c -> k u c -- Eta-expansion for better inlining
 {-# INLINEABLE liftSem #-}
 -- {-# INLINE liftSem #-}
 

@@ -10,6 +10,7 @@ module Polysemy.Scoped (
   -- * Interpretations
   runScoped,
   runScoped_,
+  rescope,
   ) where
 
 import Polysemy
@@ -36,6 +37,7 @@ scoped p m =
   ScopedMeta p (raiseUnder m)
   & sendMetaUsing Here
   & subsumeCoerce @(Scoped eff param)
+{-# INLINE scoped #-}
 
 scoped_ :: Member (Scoped_ eff) r => Sem (eff ': r) a -> Sem r a
 scoped_ = scoped ()
@@ -57,3 +59,15 @@ runScoped_
   :: (forall q x. Sem (eff ': Opaque q ': r) x -> Sem (Opaque q ': r) x)
   -> InterpreterFor (Scoped_ eff) r
 runScoped_ interp = runScoped (\() -> interp)
+{-# INLINE runScoped #-}
+
+rescope ::
+  ∀ eff p2 p1 r .
+  Member (Scoped eff p2) r =>
+  (p1 -> p2) ->
+  InterpreterFor (Scoped eff p1) r
+rescope f =
+  coerceEff @(Meta (ScopedMeta eff p1))
+  >>> metaIntoMeta @(ScopedMeta eff p2) (\(ScopedMeta p e) -> ScopedMeta (f p) e)
+  >>> subsumeCoerce @(Scoped eff p2)
+{-# INLINEABLE rescope #-}

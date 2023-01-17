@@ -89,7 +89,7 @@ sendMetaViaUsing pr to1 to2 p = sendUsing pr $ SendMeta p to1 $ \uniq pr' ->
 {-# INLINE sendMetaViaUsing #-}
 
 metaToMeta ::
-  ∀ metaeff0 metaeff1 r.
+  ∀ metaeff1 metaeff0 r.
   Member (Meta metaeff1) r =>
   (forall l m x. metaeff0 l m x -> metaeff1 l m x) ->
   InterpreterFor (Meta metaeff0) r
@@ -97,7 +97,7 @@ metaToMeta = metaToMetaUsing membership
 {-# INLINE metaToMeta #-}
 
 metaToMetaUsing ::
-  ∀ metaeff0 metaeff1 r.
+  ∀ metaeff1 metaeff0 r.
   ElemOf (Meta metaeff1) r ->
   (forall l m x. metaeff0 l m x -> metaeff1 l m x) ->
   InterpreterFor (Meta metaeff0) r
@@ -107,7 +107,7 @@ metaToMetaUsing pr n = transformUsing pr \case
 {-# INLINEABLE metaToMetaUsing #-}
 
 metaIntoMeta ::
-  ∀ metaeff0 metaeff1 r.
+  ∀ metaeff1 metaeff0 r.
   (forall l m x. metaeff0 l m x -> metaeff1 l m x) ->
   (forall x. Sem (Meta metaeff0 ': r) x -> Sem (Meta metaeff1 ': r) x)
 metaIntoMeta n = rewrite \case

@@ -68,6 +68,8 @@ library
       Polysemy.Internal.NonDet
       Polysemy.Internal.Opaque
       Polysemy.Internal.Reflection
+      Polysemy.Internal.Resume
+      Polysemy.Internal.Scoped
       Polysemy.Internal.Sing
       Polysemy.Internal.TH.Common
       Polysemy.Internal.TH.Effect
@@ -85,7 +87,12 @@ library
       Polysemy.Output
       Polysemy.Output.Manager
       Polysemy.Reader
+      Polysemy.Resume.Handrolled
+      Polysemy.Resume.InterpretH
+      Polysemy.Resume.Meta
       Polysemy.Scoped
+      Polysemy.Scoped.Handrolled
+      Polysemy.Scoped.InterpretH
       Polysemy.State
       Polysemy.State.Manager
       Polysemy.Tagged
