@@ -36,7 +36,7 @@ runResumableBase interp =
     go depth sem = sem & interpretH \case
       ResumableRun r -> propagate r
       Resume m -> do
-        res <- m depth' & runExposeH' \m' ->
+        res <- m depth & runExposeH' \m' ->
           go_ depth' m'
           & exposeRunInterpretH depth
           & toOpaqueAt @'[_]

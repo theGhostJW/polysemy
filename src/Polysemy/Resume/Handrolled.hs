@@ -40,14 +40,14 @@ runResumableBase interp =
       Left g -> k (hoist (go_ depth) g) c
       Right wav -> case wav of
         Sent (Resume m) n ->
-          go_ depth' (n (m depth'))
+          go_ depth' (n (m depth))
           & exposeRunHandrolled depth
           & toOpaqueAt @'[_]
           & interp
           & fromOpaque
           & usingSem c k
         Weaved (Resume m) (Traversal trav) mkS wv _ ex ->
-          go_ depth' (wv (mkS (m depth')))
+          go_ depth' (wv (mkS (m depth)))
           & exposeRunHandrolled depth
           & toOpaqueAt @'[_]
           & interp
