@@ -348,18 +348,18 @@ data Weaving e m a where
        -- a variant of 'Polysemy.Internal.send'.
        -- ^ @z@ is usually @Sem rInitial@, where @rInitial@ is the effect row
        -- that was in scope when this 'Weaving' was originally created.
-       , traverseState :: !(Traversal t)
+       , traverseState :: (Traversal t)
        -- ^ An implementation of 'traverse' for @t@.
-       , weaveInitState :: !(forall x. x -> t x)
+       , weaveInitState :: (forall x. x -> t x)
        -- ^ A piece of state that other effects' interpreters have already
        -- woven through this 'Weaving'.
-       , weaveDistrib :: !(forall x. t (z x) -> m (t x))
+       , weaveDistrib :: (forall x. t (z x) -> m (t x))
        -- ^ Distribute @t@ by transforming @z@ into @m@. This is
        -- usually of the form @t ('Polysemy.Sem' (Some ': Effects ': r) x) ->
        --   Sem r (t x)@
-       , weaveLowering :: !(forall r x. Sem (Weave t r ': r) x -> Sem r (t x))
+       , weaveLowering :: (forall r x. Sem (Weave t r ': r) x -> Sem r (t x))
        -- TODO document this
-       , weaveResult :: !(t a -> resultType)
+       , weaveResult :: (t a -> resultType)
        -- ^ Even though @t a@ is the moral resulting type of 'Weaving', we
        -- can't expose that fact; such a thing would prevent 'Polysemy.Sem'
        -- from being a 'Monad'.
