@@ -2,6 +2,7 @@
 
 module ScopedSpec where
 
+import Control.Applicative
 import Control.Concurrent.STM
 import Polysemy
 import Polysemy.Scoped
@@ -81,11 +82,11 @@ interpretIndirect = interpret \ Indirect -> esc
 handleEsc :: Int -> Esc m a -> Sem r a
 handleEsc i = \ Esc -> pure i
 
-test_escape :: Sem (Scoped Esc Int ': r) Int
+test_escape :: Sem (Scoped Esc Int ': r) (Int, Int)
 test_escape =
     scoped @Esc @Int 2
   $ interpretIndirect
-  $ scoped @Esc @Int 1 indirect
+  $ scoped @Esc @Int 1 (liftA2 (,) esc indirect)
 
 spec :: Spec
 spec = parallel do
@@ -105,5 +106,5 @@ spec = parallel do
             ret
       r `shouldBe` 2
     it "scoped depth" do
-      r <- runM $ runScoped (\i -> interpret (handleEsc i)) $ test_escape
-      r `shouldBe` 2
+      r <- runM $ runScoped' (\i -> interpret (handleEsc i)) $ test_escape
+      r `shouldBe` (0, 2)

@@ -1,6 +1,6 @@
 module Polysemy.Internal.Utils
   ((>>>), (<&>), (&),
-   module Polysemy.Internal.Utils) where
+   module Polysemy.Internal.Utils, module Data.Coerce) where
 
 import Control.Arrow ((>>>))
 import Data.Functor ((<&>))
@@ -36,3 +36,7 @@ infixl 1 &#
 (&#) :: forall a b. Coercible a b => a -> (a -> b) -> b
 (&#) a _ = coerce a
 {-# INLINE (&#) #-}
+
+thru :: Functor f => (f b -> res) -> f a -> (a -> b) -> res
+thru k act c = k (fmap c act)
+{-# INLINE thru #-}

@@ -13,9 +13,7 @@ module Polysemy.Writer
 
     -- * Interpretations
   , runWriter
-  , runLazyWriter
   , runWriterAssocR
-  , runLazyWriterAssocR
   , runWriterTVar
   , writerToIOFinal
   , writerToIOAssocRFinal
@@ -88,40 +86,6 @@ runWriter = runState mempty . reinterpretH
         return a
   )
 
-
-------------------------------------------------------------------------------
--- | Run a 'Writer' effect in the style of 'Control.Monad.Trans.Writer.WriterT'
--- lazily.
---
--- __Warning: This inherits the nasty space leak issue of__
--- __'Lazy.WriterT'! Don't use this if you don't have to.__
---
--- @since 1.3.0.0
-runLazyWriter
-    :: forall o r a
-     . Monoid o
-    => Sem (Writer o ': r) a
-    -> Sem r (o, a)
-runLazyWriter = interpretViaLazyWriter $ \case
-  Sent e n -> case e of
-    Tell o -> return (o, ())
-    Listen m -> do
-      ~(o, a) <- runLazyWriter (n m)
-      return (o, (o, a))
-    Pass m -> do
-      ~(o, ~(f, a)) <- runLazyWriter (n m)
-      return (f o, a)
-  Weaved e (Traversal trav) mkS wv _ ex -> case e of
-    Tell o -> return (o, ex (mkS ()))
-    Listen m -> do
-      ~(o, ta) <- runLazyWriter (wv (mkS m))
-      return (o, ex $ runIdentity $ trav (Identity #. (,) o) ta)
-    Pass m -> do
-      ~(o, tfa) <- runLazyWriter (wv (mkS m))
-      let
-        f = appEndo (getConst (trav (\a -> Const $ Endo $ \_ -> fst a) tfa)) id
-      return (f o, ex $ runIdentity $ trav (Identity #. snd) tfa)
-
 -----------------------------------------------------------------------------
 -- | Like 'runWriter', but right-associates uses of '<>'.
 --
@@ -141,28 +105,6 @@ runWriterAssocR =
   . runWriter
   . writerIntoEndoWriter
 
-
------------------------------------------------------------------------------
--- | Like 'runLazyWriter', but right-associates uses of '<>'.
---
--- This asymptotically improves performance if the time complexity of '<>'
--- for the 'Monoid' depends only on the size of the first argument.
---
--- You should always use this instead of 'runLazyWriter' if the monoid
--- is a list, such as 'String'.
---
--- __Warning: This inherits the nasty space leak issue of__
--- __'Lazy.WriterT'! Don't use this if you don't have to.__
---
--- @since 1.3.0.0
-runLazyWriterAssocR
-    :: Monoid o
-    => Sem (Writer o ': r) a
-    -> Sem r (o, a)
-runLazyWriterAssocR =
-    (fmap . first) (`appEndo` mempty)
-  . runLazyWriter
-  . writerIntoEndoWriter
 
 --------------------------------------------------------------------
 -- | Transform a 'Writer' effect into atomic operations

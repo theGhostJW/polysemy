@@ -74,10 +74,11 @@ import Control.Monad.Trans
 import Polysemy.Internal.Kind
 import Polysemy.Internal.WeaveClass
 import Polysemy.Internal.Core
+import Polysemy.Internal.Membership
 import Polysemy.Internal.Sing (SList (..))
 
 
-weaveToTransWeave :: MonadTransWeave t
+weaveToTransWeave :: (MonadTransWeave t, Representational1 (StT t))
                   => Sem (Weave (StT t) r ': r) a -> t (Sem r) a
 weaveToTransWeave = usingSem return $ \u c -> case decomp u of
   Left g -> liftHandlerWithNat weaveToTransWeave liftSem g >>= c
@@ -91,14 +92,14 @@ weaveToTransWeave = usingSem return $ \u c -> case decomp u of
 
 -- Not used (nearly as much) anymore
 liftHandler :: ( MonadTransWeave t, Monad m, Monad n
-               , forall x y. Coercible x y => Coercible (m x) (m y))
+               , Representational1 m, Representational1 (StT t))
             => (forall x. Union r m x -> n x)
             -> Union r (t m) a -> t n a
 liftHandler = liftHandlerWithNat id
 {-# INLINE liftHandler #-}
 
 liftHandlerWithNat :: (MonadTransWeave t, Monad m, Monad n
-                      , forall x y. Coercible x y => Coercible (m x) (m y))
+                      , Representational1 m, Representational1 (StT t))
                    => (forall x. q x -> t m x)
                    -> (forall x. Union r m x -> n x)
                    -> Union r q a -> t n a
@@ -111,81 +112,6 @@ liftHandlerWithNat n handler u = controlT $ \lower -> do
       (lower . weaveToTransWeave)
       u
 {-# INLINE liftHandlerWithNat #-}
-
-------------------------------------------------------------------------------
--- | A class for effect rows whose elements are inspectable.
---
--- This constraint is eventually satisfied as @r@ is instantied to a
--- monomorphic list.
--- (E.g when @r@ becomes something like
--- @'['Polysemy.State.State' Int, 'Polysemy.Output.Output' String, 'Polysemy.Embed' IO]@)
-class KnownRow r where
-  tryMembership' :: forall e. Typeable e => Maybe (ElemOf e r)
-
-instance KnownRow '[] where
-  tryMembership' = Nothing
-  {-# INLINABLE tryMembership' #-}
-
-instance (Typeable e, KnownRow r) => KnownRow (e ': r) where
-  tryMembership' :: forall e'. Typeable e' => Maybe (ElemOf e' (e ': r))
-  tryMembership' = case eqT @e @e' of
-    Just Refl -> Just Here
-    _         -> There <$> tryMembership' @r @e'
-  {-# INLINABLE tryMembership' #-}
-
-------------------------------------------------------------------------------
--- | Extracts a proof that @e@ is an element of @r@ if that
--- is indeed the case; otherwise returns @Nothing@.
-tryMembership :: forall e r. (Typeable e, KnownRow r) => Maybe (ElemOf e r)
-tryMembership = tryMembership' @r @e
-{-# INLINABLE tryMembership #-}
-
-
-------------------------------------------------------------------------------
--- | Extends a proof that @e@ is an element of @r@ to a proof that @e@ is an
--- element of the concatenation of the lists @l@ and @r@.
--- @l@ must be specified as a singleton list proof.
-extendMembershipLeft :: forall r l e
-                      . SList l -> ElemOf e r -> ElemOf e (Append l r)
-extendMembershipLeft (UnsafeMkSList n) (UnsafeMkElemOf pr) =
-  UnsafeMkElemOf (n + pr)
-{-# INLINABLE extendMembershipLeft #-}
-
-
-------------------------------------------------------------------------------
--- | Extends a proof that @e@ is an element of @l@ to a proof that @e@ is an
--- element of the concatenation of the lists @l@ and @r@.
-extendMembershipRight :: forall l r e. ElemOf e l -> ElemOf e (Append l r)
-extendMembershipRight (UnsafeMkElemOf pr) = (UnsafeMkElemOf pr)
-{-# INLINABLE extendMembershipRight #-}
-
-
-------------------------------------------------------------------------------
--- | Extends a proof that @e@ is an element of @left <> right@ to a proof that
--- @e@ is an element of @left <> mid <> right@.
--- Both @left@ and @right@ must be specified as singleton list proofs.
-injectMembership :: forall right e left mid
-                  . SList left
-                 -> SList mid
-                 -> ElemOf e (Append left right)
-                 -> ElemOf e (Append left (Append mid right))
-injectMembership (UnsafeMkSList l) (UnsafeMkSList m) (UnsafeMkElemOf pr)
-  | pr < l    = UnsafeMkElemOf pr
-  | otherwise = UnsafeMkElemOf (m + pr)
-{-# INLINABLE injectMembership #-}
-
-splitMembership :: forall right left e
-                 . SList left
-                -> ElemOf e (Append left right)
-                -> Either (ElemOf e left) (ElemOf e right)
-splitMembership (UnsafeMkSList l) (UnsafeMkElemOf pr)
-  | pr < l    = Left (UnsafeMkElemOf pr)
-  | otherwise = Right $! UnsafeMkElemOf (pr - l)
-
--- | A variant of id that gets inlined late for rewrite rule purposes
-idMembership :: ElemOf (e :: Effect) r -> ElemOf e r
-idMembership = id
-{-# INLINE[0] idMembership #-}
 
 ------------------------------------------------------------------------------
 -- | Retrieve the last effect in a 'Union'.

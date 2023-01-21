@@ -21,7 +21,7 @@ import Polysemy.Internal.Union
 import Polysemy.Internal.Utils
 import Unsafe.Coerce
 
--- Because for some reason (forall x. Coercible (e m x) (e' m x))
+-- Because for some reason (forall m x. Coercible (e m x) (e' m x))
 -- doesn't imply (Coercible e e')
 class (forall m x. Coercible (e m x) (e' m x))
    => CoercibleEff (e :: Effect) (e' :: Effect)

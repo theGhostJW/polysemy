@@ -22,6 +22,7 @@ import Polysemy.Error
 import Polysemy.Internal
 import Polysemy.Internal.NonDet
 import Polysemy.Internal.Union
+import Polysemy.Internal.Utils
 import Polysemy.Internal.Core
 
 ------------------------------------------------------------------------------
@@ -164,8 +165,8 @@ runNonDetInC = usingSem return $ \u c ->
       Sent e n -> case e of
         Empty -> NonDetC $ \_ b -> b
         Choose l r -> (runNonDetInC (n l) <|> runNonDetInC (n r)) >>= c
-      Weaved e _ mkS wv _ ex -> case e of
+      Weaved e _ mkS wv _ -> case e of
         Empty -> NonDetC $ \_ b -> b
         Choose l r ->
           (runNonDetInC (wv (mkS l)) <|> runNonDetInC (wv (mkS r)))
-          >>= c . ex
+          >>= c .# coerce

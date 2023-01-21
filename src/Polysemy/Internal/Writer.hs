@@ -198,23 +198,23 @@ runWeaveLazyWriter = weaveToTransWeave
 --     (\a c -> c (\o -> c0 (LazyT2 (o, a))))
 --     ($ mempty)
 
-interpretViaLazyWriter
-  :: forall o e r a
-   . Monoid o
-  => (forall x. Weaving e (Sem (e ': r)) x -> Sem r (o, x))
-  -> Sem (e ': r) a
-  -> Sem r (o, a)
-interpretViaLazyWriter f =
-    fmap (\ ~(a, s) -> (s, a))
-  . Lazy.runWriterT
-  #. usingSem return \u c ->
-    case decomp u of
-      Left g ->
-        liftHandlerWithNat
-          (Lazy.WriterT
-           #. fmap (\ ~(s, a) -> (a, s)) . interpretViaLazyWriter f)
-          liftSem
-          g
-        >>= c
-      Right wav ->
-        Lazy.WriterT ((\ ~(s, a) -> (a, s)) <$> f wav) >>= c
+-- interpretViaLazyWriter
+--   :: forall o e r a
+--    . Monoid o
+--   => (forall x. Weaving e (Sem (e ': r)) x -> Sem r (o, x))
+--   -> Sem (e ': r) a
+--   -> Sem r (o, a)
+-- interpretViaLazyWriter f =
+--     fmap (\ ~(a, s) -> (s, a))
+--   . Lazy.runWriterT
+--   #. usingSem return \u c ->
+--     case decomp u of
+--       Left g ->
+--         liftHandlerWithNat
+--           (Lazy.WriterT
+--            #. fmap (\ ~(s, a) -> (a, s)) . interpretViaLazyWriter f)
+--           liftSem
+--           g
+--         >>= c
+--       Right wav ->
+--         Lazy.WriterT ((\ ~(s, a) -> (a, s)) <$> f wav) >>= c

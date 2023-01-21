@@ -3,6 +3,7 @@ module Polysemy.Internal.Scoped where
 import Polysemy
 import Polysemy.HigherOrder
 import Polysemy.Internal.Core
+import Polysemy.Internal.Membership
 import Polysemy.Internal.Utils
 
 data Run eff m a where

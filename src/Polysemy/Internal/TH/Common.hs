@@ -34,7 +34,7 @@ import           Language.Haskell.TH
 import           Language.Haskell.TH.Datatype
 import           Language.Haskell.TH.PprLib
 import           Polysemy.Internal (Sem, send)
-import           Polysemy.Internal.Core (Member)
+import           Polysemy.Internal.Membership (Member)
 
 #if __GLASGOW_HASKELL__ >= 804
 import           Prelude hiding ((<>))

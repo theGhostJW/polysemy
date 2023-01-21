@@ -484,7 +484,7 @@ interpretH h = go
           {-# NOINLINE goSent_ #-}
         in
           runSem (goSent (h e)) k c
-      Right (Weaved (e :: e z y) (trav :: Traversal t) _ wv lwr ex) ->
+      Right (Weaved (e :: e z y) (trav :: Traversal t) _ wv lwr) ->
         reify trav $ \(_ :: pr s) ->
           let
             goWeaved :: forall rC x
@@ -514,8 +514,7 @@ interpretH h = go
                            EmbedW $ liftSem $ Union pr
                            $ Weaved e' trav mkS'
                               (fmap getViaTraversal #. n id .# ViaTraversal)
-                              lwr'
-                              id)) $ \ta ->
+                              lwr')) $ \ta ->
                     k' (injUsing Here $ RestoreW ta) (c' . ex')
             {-# INLINE goWeaved #-}
 
@@ -525,7 +524,7 @@ interpretH h = go
             goWeaved_ = goWeaved
             {-# NOINLINE goWeaved_ #-}
           in
-            runSem (lwr (goWeaved (h e))) k (c . ex)
+            runSem (lwr (goWeaved (h e))) k (c .# coerce)
     {-# INLINE go #-}
 
     go_ :: forall a'. Sem (e ': r) a' -> Sem r a'

@@ -5,6 +5,7 @@
 module Polysemy.Internal.Combinators
   ( -- * First order
     rewrite
+  , rewriteAt
   , transform
   , transformUsing
 
@@ -14,9 +15,12 @@ module Polysemy.Internal.Combinators
   ) where
 
 import Data.Coerce
+import Data.Type.Equality
 import Polysemy.Internal
 import Polysemy.Internal.Union
+import Polysemy.Internal.Sing
 import Polysemy.Internal.Core
+import Polysemy.Internal.Membership
 import Polysemy.Internal.Utils
 
 runWeaveState :: s -> Sem (Weave ((,) s) r ': r) a -> Sem r (s, a)
@@ -137,7 +141,7 @@ lazilyStateful f = go
 --
 -- @since 1.2.3.0
 rewrite
-    :: forall e1 e2 r a
+    :: forall e2 e1 r a
      . (forall z x. e1 z x -> e2 z x)
     -> Sem (e1 ': r) a
     -> Sem (e2 ': r) a
@@ -153,6 +157,25 @@ rewrite f = go
     go_ = go
     {-# NOINLINE go_ #-}
 {-# INLINEABLE rewrite #-}
+
+rewriteAt
+    :: forall l e2 e1 r a
+     . SList l
+    -> (forall z x. e1 z x -> e2 z x)
+    -> Sem (Append l (e1 ': r)) a
+    -> Sem (Append l (e2 ': r)) a
+rewriteAt sl f = go
+  where
+    go :: forall x. Sem (Append l (e1 ': r)) x -> Sem (Append l (e2 ': r)) x
+    go = hoistSem $ \(Union pr wav) -> hoist go_ $ case isMemberAt @r @e1 @e2 sl pr of
+      Left pr' -> Union pr' wav
+      Right Refl -> Union (memberAt @r sl) $ rewriteWeaving f wav
+    {-# INLINE go #-}
+
+    go_ :: forall x. Sem (Append l (e1 ': r)) x -> Sem (Append l (e2 ': r)) x
+    go_ = go
+    {-# NOINLINE go_ #-}
+{-# INLINEABLE rewriteAt #-}
 
 
 ------------------------------------------------------------------------------
