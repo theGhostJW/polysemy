@@ -25,8 +25,8 @@
     };
 
     defaultPackages = {
-      inherit (ghcs."902") polysemy polysemy-plugin;
-      default = ghcs."902".polysemy;
+      inherit (ghcs."925") polysemy polysemy-plugin;
+      default = ghcs."925".polysemy;
     };
 
     packages = foldl' (l: r: l // r) defaultPackages (map mkPackages (attrNames ghcs));
@@ -45,7 +45,7 @@
   in {
     inherit packages;
 
-    devShells = devShells // { default = devShells.ghc902; };
+    devShells = devShells // { default = devShells.ghc925; };
 
     checks = packages;
   });
