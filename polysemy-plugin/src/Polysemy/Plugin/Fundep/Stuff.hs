@@ -52,7 +52,7 @@ data PolysemyStuff (l :: LookupState) = PolysemyStuff
 -- | All of the things we need to lookup.
 polysemyStuffLocations :: PolysemyStuff 'Locations
 polysemyStuffLocations = PolysemyStuff
-  { findClass = ("Polysemy.Internal.Core", "Member")
+  { findClass = ("Polysemy.Internal.Membership", "Member")
   , semTyCon  = ("Polysemy.Internal.Core", "Sem")
   }
 
