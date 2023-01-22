@@ -380,7 +380,7 @@ data TransformingVector m res
   = TransedUnbuffered {-# UNPACK #-} !(Vector (Handler' m res))
   | TransedBuffered
       {-# UNPACK #-} !Int
-      !(B.Bundle Vector (Handler' m res))
+      {-# UNPACK #-} !(B.Bundle Vector (Handler' m res))
       {-# UNPACK #-} !(Vector (Handler' m res))
 
 transformHandlerVector

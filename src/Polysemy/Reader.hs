@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE BangPatterns, TemplateHaskell #-}
 
 -- | Description: The 'Reader' effect and its interpreters
 module Polysemy.Reader
@@ -9,6 +9,7 @@ module Polysemy.Reader
   , ask
   , asks
   , local
+  , local'
 
     -- * Interpretations
   , runReader
@@ -40,6 +41,10 @@ data Reader i m a where
 
 makeSem ''Reader
 
+-- | A variant of 'local' that is strict in the function
+local' :: forall i r a. Member (Reader i) r => (i -> i) -> Sem r a -> Sem r a
+local' f m = local f (ask @i >>= \ !_ -> m)
+{-# INLINE local' #-}
 
 ------------------------------------------------------------------------------
 -- | Apply a function to the environment and return the result.
