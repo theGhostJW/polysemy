@@ -24,8 +24,7 @@ data RowTransformer r r' where
   ExtendAlt :: Proxy# r -> {-# UNPACK #-} !(SList l) -> RowTransformer l (Append l r)
   Under :: {-# UNPACK #-} !(SList l) -> RowTransformer a b -> RowTransformer (Append l a) (Append l b)
   Subsume :: {-# UNPACK #-} !(ElemOf e r) -> RowTransformer (e ': r) r
-  Swap :: Proxy# r -> {-# UNPACK #-} !(SList l) -> {-# UNPACK #-} !(SList mid)
-       -> RowTransformer (Append l (Append mid r)) (Append mid (Append l r))
+  Swap :: Proxy# r -> {-# UNPACK #-} !(SList l) -> {-# UNPACK #-} !(SList mid) -> RowTransformer (Append l (Append mid r)) (Append mid (Append l r))
   Split :: {-# UNPACK #-} !(SList l) -> RowTransformer l g -> RowTransformer r g -> RowTransformer (Append l r) g
   Expose :: {-# UNPACK #-} !(ElemOf e r) -> RowTransformer r (e ': r)
   -- Subsume thirsts for this. Can be written using Split and ExtendAlt
@@ -49,14 +48,14 @@ instance Category RowTransformer where
 joinRow :: RowTransformer r' r'' -> RowTransformer r r' -> RowTransformer r r''
 joinRow Id r = r
 joinRow r Id = r
--- joinRow (Raise (UnsafeMkSList i)) (Raise (UnsafeMkSList j)) = unsafeCoerce (Raise (UnsafeMkSList (i + j)))
--- joinRow (Extend (UnsafeMkSList i)) (Extend (UnsafeMkSList j)) = unsafeCoerce (Extend (UnsafeMkSList (i + j)))
--- joinRow (ExtendAlt _ (UnsafeMkSList i)) (Extend _) = unsafeCoerce (ExtendAlt proxy# (UnsafeMkSList i))
--- joinRow (ExtendAlt _ (UnsafeMkSList i)) (ExtendAlt _ _) = unsafeCoerce (ExtendAlt proxy# (UnsafeMkSList i))
--- joinRow (Under (UnsafeMkSList i) l) (Under (UnsafeMkSList j) r) = case compare i j of
---   EQ -> unsafeCoerce $ underRowMany (UnsafeMkSList i) (joinRow l (unsafeCoerce r))
---   LT -> unsafeCoerce $ underRowMany (UnsafeMkSList i) (joinRow l (unsafeCoerce $ Under (UnsafeMkSList (j - i)) r))
---   GT -> unsafeCoerce $ underRowMany (UnsafeMkSList j) (joinRow (unsafeCoerce $ Under (UnsafeMkSList (i - j)) l) r)
+joinRow (Raise (UnsafeMkSList i)) (Raise (UnsafeMkSList j)) = unsafeCoerce (Raise (UnsafeMkSList (i + j)))
+joinRow (Extend (UnsafeMkSList i)) (Extend (UnsafeMkSList j)) = unsafeCoerce (Extend (UnsafeMkSList (i + j)))
+joinRow (ExtendAlt _ (UnsafeMkSList i)) (Extend _) = unsafeCoerce (ExtendAlt proxy# (UnsafeMkSList i))
+joinRow (ExtendAlt _ (UnsafeMkSList i)) (ExtendAlt _ _) = unsafeCoerce (ExtendAlt proxy# (UnsafeMkSList i))
+joinRow (Under (UnsafeMkSList i) l) (Under (UnsafeMkSList j) r) = case compare i j of
+  EQ -> unsafeCoerce $ underRowMany (UnsafeMkSList i) (joinRow l (unsafeCoerce r))
+  LT -> unsafeCoerce $ underRowMany (UnsafeMkSList i) (joinRow l (unsafeCoerce $ Under (UnsafeMkSList (j - i)) r))
+  GT -> unsafeCoerce $ underRowMany (UnsafeMkSList j) (joinRow (unsafeCoerce $ Under (UnsafeMkSList (i - j)) l) r)
 joinRow l r = Join l r
 
 idRow :: RowTransformer r r
@@ -84,8 +83,8 @@ underRow1 = underRowMany (SCons SEnd)
 
 underRowMany :: SList l -> RowTransformer x y -> RowTransformer (Append l x) (Append l y)
 underRowMany SEnd m = m
--- underRowMany (UnsafeMkSList i) (Under (UnsafeMkSList j) m) = unsafeCoerce (underRowMany (UnsafeMkSList (i + j)) m)
--- underRowMany _ Id = Id
+underRowMany (UnsafeMkSList i) (Under (UnsafeMkSList j) m) = unsafeCoerce (underRowMany (UnsafeMkSList (i + j)) m)
+underRowMany _ Id = Id
 underRowMany pr m = Under pr m
 
 subsumeRow :: ElemOf e r -> RowTransformer (e ': r) r
