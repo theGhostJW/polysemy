@@ -36,12 +36,15 @@ runWeaveState s0' sem0' = go s0' sem0'
             f (weave (s, ()) (uncurry runWeaveState) (runWeaveState s) wav)
               (\(s', x) -> c x s')
           ) k
+        {-# INLINE g' #-}
 
-        AHandler !h = AHandler $ \wav c s -> fromFOEff wav $ \ex -> \case
+        !k_ = forceHandlers k
+
+        AHandler h = AHandler $ \wav c s -> fromFOEff wav $ \ex -> \case
           RestoreW (s', a) -> c (ex a) s'
           GetStateW main -> c (ex (main ((,) s))) s
           LiftWithW main -> c (ex (main (go_ s))) s
-          EmbedW m -> runSem m k (\a -> c (ex a) s)
+          EmbedW m -> runSem m k_ (\a -> c (ex a) s)
 
         !k' = mkHandlers $ consHandler' h g'
       in
@@ -92,14 +95,16 @@ stateful f = go
     go :: forall x. s -> Sem (e ': r) x -> Sem r (s, x)
     go s0 sem0 = Sem $ \k c0 ->
       let
+        !k_ = forceHandlers k
+
         g' = mapHandlers
           (\f wav c s ->
             f (weave (s, ()) (uncurry go_) (runWeaveState s) wav)
               (\(s', x) -> c x s')
           ) k
 
-        AHandler !h = AHandler $ \wav c s -> fromFOEff wav $ \ex e ->
-          runSem (f e s) k (\(s', x) -> c (ex x) s')
+        AHandler h = AHandler $ \wav c s -> fromFOEff wav $ \ex e ->
+          runSem (f e s) k_ (\(s', x) -> c (ex x) s')
 
         !k' = mkHandlers $ consHandler' h g'
       in
@@ -128,7 +133,12 @@ lazilyStateful f = go
     go :: forall x. s -> Sem (e ': r) x -> Sem r (s, x)
     go s0 sem0 = Sem $ \k c0 ->
       let
-        g' = mapHandlers
+        !k_ = forceHandlers k
+
+        AHandler !h = AHandler $ \wav c s -> fromFOEff wav $ \ex e ->
+          runSem (f e s) k_ (\ ~(s', x) -> c (ex x) s')
+
+        !handlers = mkHandlers $ consHandler' h $ mapHandlers
           (\f wav c s ->
             f (weave
                 (LazyT2 (s, ()))
@@ -138,12 +148,9 @@ lazilyStateful f = go
               )
               (\(LazyT2 ~(s', x)) -> c x s')
           ) k
-
-        AHandler h = AHandler $ \wav c s -> fromFOEff wav $ \ex e ->
-          runSem (f e s) k (\ ~(s', x) -> c (ex x) s')
       in
         runSem sem0
-          (mkHandlers $ consHandler' h g')
+          handlers
           (\a s -> c0 (s, a))
           s0
     {-# INLINE go #-}
@@ -165,8 +172,11 @@ rewrite
      . (forall z x. e1 z x -> e2 z x)
     -> Sem (e1 ': r) a
     -> Sem (e2 ': r) a
-rewrite f = reinterpretViaHandlerFast $ \_ hs w ->
-  getHandler' hs Here (rewriteWeaving f w)
+rewrite f = reinterpretViaHandlerFast $ \_ hs ->
+  let
+    AHandler !h = AHandler $ getHandler' hs Here
+  in
+    \w -> h (rewriteWeaving f w)
 {-# INLINEABLE rewrite #-}
 
 rewriteAt
@@ -180,10 +190,10 @@ rewriteAt sl f = go
     go :: forall x. Sem (Append l (e1 ': r)) x -> Sem (Append l (e2 ': r)) x
     go = hoistSem $ \(Handlers n hs) ->
       let
-        AHandler !h = AHandler $ \w ->
-          getHandler' hs (memberAt @r sl) (rewriteWeaving f w)
+        AHandler !e2h = AHandler $ getHandler' hs (memberAt @r sl)
+        AHandler e1h = AHandler $ \w -> e2h (rewriteWeaving f w)
       in
-        Handlers (n . go_) $ insertHandler' @r @e2 sl h hs
+        Handlers (n . go_) $ insertHandler' @r @e2 sl e1h hs
     {-# INLINE go #-}
 
     go_ :: forall x. Sem (Append l (e1 ': r)) x -> Sem (Append l (e2 ': r)) x
@@ -212,6 +222,9 @@ transformUsing
     -> (forall z x. e1 z x -> e2 z x)
     -> Sem (e1 ': r) a
     -> Sem r a
-transformUsing pr f = interpretViaHandlerFast $ \_ hs w ->
-  getHandler' hs pr (rewriteWeaving f w)
+transformUsing pr f = interpretViaHandlerFast $ \_ hs ->
+  let
+    AHandler !h = AHandler (getHandler' hs pr)
+  in
+    \w -> h (rewriteWeaving f w)
 {-# INLINEABLE transformUsing #-}

@@ -148,7 +148,7 @@ instance Raise r r' => Raise r (_0 ': r') where
 raise :: ∀ e r a. Sem r a -> Sem (e ': r) a
 raise = hoistSem $ \(Handlers n hs) ->
   Handlers (n . raise) (dropHandlers' @'[_] hs)
--- {-# INLINE[3] raise #-}
+{-# INLINE[3] raise #-}
 
 
 ------------------------------------------------------------------------------
@@ -443,8 +443,9 @@ interpretFast h = go
     go :: InterpreterFor e r
     go = hoistSem $ \hs@(Handlers n v) ->
       let
+        !hs_ = forceHandlers hs
         AHandler !ah = AHandler $ \wv c -> fromFOEff wv $ \ex e ->
-          runSem (h e) hs (c . ex)
+          runSem (h e) hs_ (c . ex)
       in
         Handlers (n . go_) (consHandler' ah v)
     {-# INLINE go #-}

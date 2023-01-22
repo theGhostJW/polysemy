@@ -29,7 +29,8 @@ dependencies:
 - unagi-chan >= 0.4.0.0 && < 0.5
 - async >= 2.2 && < 3
 - type-errors >= 0.2.0.0
-- vector >= 0.11 && < 0.14
+- vector >= 0.13 && < 0.14
+- primitive >= 0.6 && < 0.8
 
 custom-setup:
   dependencies:

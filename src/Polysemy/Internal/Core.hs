@@ -24,6 +24,7 @@ module Polysemy.Internal.Core where
 import Control.Monad.Fail
 #endif
 import Data.Coerce
+import Data.Primitive.Array
 import Control.Applicative
 import Control.Monad
 import Control.Monad.IO.Class
@@ -207,12 +208,24 @@ newtype Sem (r :: EffectRow) a = Sem {
 
 data Handlers r m res where
   Handlers :: (forall x. m x -> z x)
-           -> !(HandlerVector r z res)
+           -> {-# UNPACK #-} !(HandlerVector r z res)
            -> Handlers r m res
 
 emptyHandlers :: Handlers '[] m res
 emptyHandlers = Handlers id (HandlerVector V.empty)
 {-# INLINE emptyHandlers #-}
+
+forceHandlers :: Handlers r m res -> Handlers r m res
+forceHandlers (Handlers n v) = Handlers n (forceHandlers' v)
+{-# INLINE forceHandlers #-}
+
+forceHandlers' :: HandlerVector r m res -> HandlerVector r m res
+forceHandlers' (HandlerVector v) = HandlerVector $ case V.toArraySlice v of
+  (arr, _, len)
+    -- Only force if the vector is less than 2/3:ds of its original size.
+    | 3*len < 2*sizeofArray arr -> V.force v
+    | otherwise -> v
+{-# INLINE forceHandlers' #-}
 
 emptyHandlers' :: HandlerVector '[] m res
 emptyHandlers' = HandlerVector V.empty
@@ -237,7 +250,7 @@ hoistHandler :: (forall x. m x -> n x)
              -> (forall x. Weaving e n x -> (x -> res) -> res)
              -> (forall x. Weaving e m x -> (x -> res) -> res)
 hoistHandler n f = \wav -> f (hoistWeaving n wav)
--- {-# INLINE hoistHandler #-}
+{-# INLINE hoistHandler #-}
 
 imapHandlers :: (   forall e x
                   . ElemOf e r
@@ -482,7 +495,7 @@ transformSem t = go
     go :: forall x. Sem r x -> Sem r' x
     go = hoistSem $ \(Handlers n hs) ->
       Handlers (n . go_) (transformHandlerVector t hs)
-    -- {-# INLINE go #-}
+    {-# INLINE go #-}
 
     go_ :: forall x. Sem r x -> Sem r' x
     go_ = go
@@ -516,7 +529,7 @@ hoistSem n = \sem -> Sem $ \k c ->
     !k' = n k
   in
     runSem sem k' c
--- {-# INLINE hoistSem #-}
+{-# INLINE hoistSem #-}
 
 interpretViaHandlerFast
   :: forall e r
@@ -539,7 +552,7 @@ interpretViaHandlerFast h = go
     go_ :: InterpreterFor e r
     go_ = go
     {-# NOINLINE go_ #-}
--- {-# INLINE interpretViaHandlerFast #-}
+{-# INLINE interpretViaHandlerFast #-}
 
 reinterpretViaHandlerFast
   :: forall e1 e2 r
@@ -562,7 +575,7 @@ reinterpretViaHandlerFast h = go
     go_ :: forall x. Sem (e1 ': r) x -> Sem (e2 ': r) x
     go_ = go
     {-# NOINLINE go_ #-}
--- {-# INLINE reinterpretViaHandlerFast #-}
+{-# INLINE reinterpretViaHandlerFast #-}
 
 interpretViaHandlerSlow
   :: forall e r

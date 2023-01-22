@@ -130,6 +130,7 @@ library
     , containers >=0.5 && <0.7
     , first-class-families >=0.5.0.0 && <0.9
     , mtl >=2.2.2 && <3
+    , primitive >=0.6 && <0.8
     , stm ==2.*
     , syb ==0.7.*
     , template-haskell >=2.12.0.0 && <3
@@ -137,7 +138,7 @@ library
     , transformers >=0.5.2.0 && <0.6
     , type-errors >=0.2.0.0
     , unagi-chan >=0.4.0.0 && <0.5
-    , vector >=0.11 && <0.14
+    , vector ==0.13.*
   default-language: Haskell2010
   if impl(ghc >= 9.2.4)
     default-extensions:
@@ -200,6 +201,7 @@ test-suite polysemy-test
     , inspection-testing >=0.4.2 && <0.5
     , mtl >=2.2.2 && <3
     , polysemy
+    , primitive >=0.6 && <0.8
     , stm ==2.*
     , syb ==0.7.*
     , template-haskell >=2.12.0.0 && <3
@@ -207,7 +209,7 @@ test-suite polysemy-test
     , transformers >=0.5.2.0 && <0.6
     , type-errors >=0.2.0.0
     , unagi-chan >=0.4.0.0 && <0.5
-    , vector >=0.11 && <0.14
+    , vector ==0.13.*
   default-language: Haskell2010
   if impl(ghc >= 9.2.4)
     default-extensions:

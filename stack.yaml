@@ -4,3 +4,5 @@ packages:
 - .
 - polysemy-plugin
 
+extra-deps:
+- vector-0.13.0.0
