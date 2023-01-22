@@ -415,7 +415,7 @@ transformHandlerVector t0 = \(HandlerVector v) ->
     go :: RowTransformer r r'
        -> TransformingVector m res -> TransformingVector m res
     go Id v = v
-    go (Join l r) v = go l (go r v)
+    go (Join l r) v = go r (go l v)
     go (Raise (UnsafeMkSList n)) (TransedUnbuffered v) =
       TransedUnbuffered (V.unsafeDrop n v)
     go (Raise (UnsafeMkSList n)) (TransedBuffered bn b v) = case compare n bn of
