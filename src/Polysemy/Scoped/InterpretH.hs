@@ -1,5 +1,8 @@
 {-# LANGUAGE BangPatterns #-}
-module Polysemy.Scoped.InterpretH (
+module Polysemy.Scoped.InterpretH where
+{-
+
+  (
   -- * Effect
   Scoped,
   Scoped_,
@@ -58,3 +61,4 @@ runScoped_
   -> InterpreterFor (Scoped_ eff) r
 runScoped_ interp = runScoped (\() -> interp)
 {-# INLINE runScoped_ #-}
+-}

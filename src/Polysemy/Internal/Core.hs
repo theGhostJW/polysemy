@@ -201,35 +201,174 @@ import qualified Data.Vector.Generic.Mutable as GM
 -- use the ('Polysemy.Output.Output' 'Int') effect.
 --
 -- @since 0.1.2.0
-newtype Sem (r :: EffectRow) a = Sem
-  { runSem
-        :: ∀ res
-         . (∀ x. Union r (Sem r) x -> (x -> res) -> res)
-        -> (a -> res) -> res
+newtype Sem (r :: EffectRow) a = Sem {
+    runSem :: ∀ res. Handlers r (Sem r) res -> (a -> res) -> res
   }
 
 data Handlers r m res where
-  Handlers :: (forall x. m x -> z x) -> HandlerVector r z res -> Handlers r m res
+  Handlers :: (forall x. m x -> z x)
+           -> !(HandlerVector r z res)
+           -> Handlers r m res
 
-newtype Handler m res = Handler { unHandler :: forall e x. Weaving e m x -> (x -> res) -> res }
+emptyHandlers :: Handlers '[] m res
+emptyHandlers = Handlers id (HandlerVector V.empty)
+{-# INLINE emptyHandlers #-}
+
+emptyHandlers' :: HandlerVector '[] m res
+emptyHandlers' = HandlerVector V.empty
+{-# INLINE emptyHandlers' #-}
+
+-- expensive
+getHandlerVector :: Handlers r m res -> HandlerVector r m res
+getHandlerVector (Handlers n (HandlerVector hs)) = HandlerVector $
+  V.map (\(Handler' h) -> Handler' $ \wav -> h (hoistWeaving n wav)) hs
+{-# INLINE getHandlerVector #-}
+
+imapHandlers' :: (   forall e x
+                   . ElemOf e r
+                  -> (forall y. Weaving e m y -> (y -> res) -> res)
+                  -> Weaving e m' x -> (x -> res') -> res'
+                )
+              -> HandlerVector r m res -> HandlerVector r m' res'
+imapHandlers' f (HandlerVector hs) = HandlerVector $
+  V.imap (\i (Handler' h) -> Handler' (f (UnsafeMkElemOf i) h)) hs
+
+hoistHandler :: (forall x. m x -> n x)
+             -> (forall x. Weaving e n x -> (x -> res) -> res)
+             -> (forall x. Weaving e m x -> (x -> res) -> res)
+hoistHandler n f = \wav -> f (hoistWeaving n wav)
+-- {-# INLINE hoistHandler #-}
+
+imapHandlers :: (   forall e x
+                  . ElemOf e r
+                 -> (forall y. Weaving e m y -> (y -> res) -> res)
+                 -> Weaving e m' x -> (x -> res') -> res'
+               )
+             -> Handlers r m res -> HandlerVector r m' res'
+imapHandlers f (Handlers n (HandlerVector hs)) = HandlerVector $
+  V.imap (\i (Handler' h) ->
+            Handler' (f (UnsafeMkElemOf i) (\wv -> h (hoistWeaving n wv))))
+         hs
+{-# INLINE imapHandlers #-}
+
+mapHandlers' :: (   forall e x
+                   . (forall y. Weaving e m y -> (y -> res) -> res)
+                  -> Weaving e m' x -> (x -> res') -> res'
+                )
+              -> HandlerVector r m res -> HandlerVector r m' res'
+mapHandlers' f (HandlerVector hs) = HandlerVector $
+  V.map (\(Handler' h) -> Handler' (f h)) hs
+{-# INLINE mapHandlers' #-}
+
+mapHandlers :: (   forall e x
+                 . (forall y. Weaving e m y -> (y -> res) -> res)
+                -> Weaving e m' x -> (x -> res') -> res'
+              )
+            -> Handlers r m res -> HandlerVector r m' res'
+mapHandlers f (Handlers n (HandlerVector hs)) = HandlerVector $
+  V.map (\(Handler' h) -> Handler' (f (\wv -> h (hoistWeaving n wv)))) hs
+{-# INLINE mapHandlers #-}
+
+mkHandlers :: HandlerVector r m res -> Handlers r m res
+mkHandlers = Handlers id
+{-# INLINE mkHandlers #-}
+
+type Handler e m res = forall x. Weaving e m x -> (x -> res) -> res
+
+newtype Handler' m res = Handler' { unHandler' :: forall e. Handler e m res }
 
 type role HandlerVector representational representational representational
-newtype HandlerVector (r :: EffectRow) m res = HandlerVector (Vector (Handler m res))
+newtype HandlerVector (r :: EffectRow) m res = HandlerVector (Vector (Handler' m res))
 
-getHandler :: Handlers r m res -> ElemOf e r
-           -> (forall x. Weaving e m x -> (x -> res) -> res)
-getHandler (Handlers to v) pr = \wav -> getHandler' v pr (hoistWeaving to wav)
+getHandler :: Handlers r m res -> ElemOf e r -> Handler e m res
+getHandler (Handlers to v) pr =
+  let
+    !h = getHandler' v pr
+  in
+    \wav -> h (hoistWeaving to wav)
+{-# INLINE getHandler #-}
 
-getHandler' :: HandlerVector r m res -> ElemOf e r
-            -> (forall x. Weaving e m x -> (x -> res) -> res)
-getHandler' (HandlerVector v) (UnsafeMkElemOf i) = unHandler (v V.! i)
+getHandler' :: HandlerVector r m res -> ElemOf e r -> Handler e m res
+getHandler' (HandlerVector v) (UnsafeMkElemOf i) = unHandler' (v V.! i)
+{-# INLINE getHandler' #-}
+
+infixr 5 `concatHandlers'`
+concatHandlers' :: HandlerVector l m res
+                -> HandlerVector r m res
+                -> HandlerVector (Append l r) m res
+concatHandlers' (HandlerVector l) (HandlerVector r) = HandlerVector (l V.++ r)
+{-# INLINE concatHandlers' #-}
+
+generateHandlers'
+  :: SList r
+  -> (forall x. ElemOf e r -> Weaving e m x -> (x -> res) -> res)
+  -> HandlerVector r m res
+generateHandlers' (UnsafeMkSList s) f =
+  HandlerVector (V.generate s (unsafeCoerce f))
+{-# INLINE generateHandlers' #-}
+
+insertHandler' :: forall r e_ e l m res
+                . SList l
+               -> Handler e m res
+               -> HandlerVector (Append l (e_ ': r)) m res
+               -> HandlerVector (Append l (e ': r)) m res
+insertHandler' (UnsafeMkSList i) h (HandlerVector v) =
+  HandlerVector $ V.create $ do
+    mv <- V.thaw v
+    MV.write mv i (unsafeCoerce h)
+    return mv
+{-# INLINE insertHandler' #-}
+
+interceptHandler' :: forall r e m res
+                   . ElemOf e r
+                  -> Handler e m res
+                  -> HandlerVector r m res
+                  -> HandlerVector r m res
+interceptHandler' (UnsafeMkElemOf i) h (HandlerVector v) =
+  HandlerVector $ V.create $ do
+    mv <- V.thaw v
+    MV.write mv i (unsafeCoerce h)
+    return mv
+{-# INLINE interceptHandler' #-}
+
+infixr 5 `consHandler'`
+consHandler' :: Handler e m res
+             -> HandlerVector r m res
+             -> HandlerVector (e ': r) m res
+consHandler' h (HandlerVector hs) = HandlerVector (V.cons (unsafeCoerce h) hs)
+{-# INLINE consHandler' #-}
+
+dropHandlers' :: forall l r m res
+               . KnownList l
+              => HandlerVector (Append l r) m res
+              -> HandlerVector r m res
+dropHandlers' (HandlerVector hs) | UnsafeMkSList l <- singList @l =
+  HandlerVector (V.unsafeDrop l hs)
+{-# INLINE dropHandlers' #-}
+
+takeHandlers' :: forall l r m res
+               . KnownList l
+              => HandlerVector (Append l r) m res
+              -> HandlerVector l m res
+takeHandlers' (HandlerVector hs) | UnsafeMkSList l <- singList @l =
+  HandlerVector (V.unsafeTake l hs)
+{-# INLINE takeHandlers' #-}
+
+splitHandlers' :: forall l r m res
+                . KnownList l
+               => HandlerVector (Append l r) m res
+               -> (HandlerVector l m res, HandlerVector r m res)
+splitHandlers' (HandlerVector hs)
+  | UnsafeMkSList n <- singList @l, (l, r) <- V.splitAt n hs =
+      (HandlerVector l, HandlerVector r)
+
 
 data TransformingVector m res
-  = TransedUnbuffered {-# UNPACK #-} !(Vector (Handler m res))
+  = TransedUnbuffered {-# UNPACK #-} !(Vector (Handler' m res))
   | TransedBuffered
       {-# UNPACK #-} !Int
-      !(B.Bundle Vector (Handler m res))
-      {-# UNPACK #-} !(Vector (Handler m res))
+      !(B.Bundle Vector (Handler' m res))
+      {-# UNPACK #-} !(Vector (Handler' m res))
 
 transformHandlerVector
   :: RowTransformer r r'
@@ -239,7 +378,7 @@ transformHandlerVector t0 = \(HandlerVector v) ->
     TransedUnbuffered v' -> HandlerVector v'
     TransedBuffered _ b v' -> HandlerVector (collapse b v')
   where
-    conc :: Int -> B.Bundle Vector (Handler m res)
+    conc :: Int -> B.Bundle Vector (Handler' m res)
          -> TransformingVector m res -> TransformingVector m res
     conc i b (TransedUnbuffered v) = TransedBuffered i b v
     conc i b (TransedBuffered i' b' v) = TransedBuffered (i + i') (b B.++ b') v
@@ -247,6 +386,18 @@ transformHandlerVector t0 = \(HandlerVector v) ->
     collapse :: B.Bundle Vector a -> Vector a -> Vector a
     collapse b v = G.unstream (b B.++ G.stream v)
     {-# INLINE collapse #-}
+
+    combine :: TransformingVector m res
+            -> TransformingVector m res
+            -> TransformingVector m res
+    combine (TransedUnbuffered l) (TransedUnbuffered r) =
+      TransedBuffered (V.length l) (G.stream l) r
+    combine (TransedBuffered bn b l) (TransedUnbuffered r) =
+      TransedBuffered (bn + V.length l) (b B.++ G.stream l) r
+    combine (TransedUnbuffered l) (TransedBuffered bn b r) =
+      TransedBuffered (V.length l + bn) (G.stream l B.++ b) r
+    combine (TransedBuffered bnl bl l) (TransedBuffered bnr br r) =
+      TransedBuffered (bnl + V.length l + bnr) (bl B.++ G.stream l B.++ br) r
 
     go :: RowTransformer r r'
        -> TransformingVector m res -> TransformingVector m res
@@ -265,6 +416,11 @@ transformHandlerVector t0 = \(HandlerVector v) ->
         TransedBuffered bn b (V.take (V.length v - n) v)
       | otherwise =
         TransedUnbuffered (V.take (bn + V.length v - n) (G.unstream b))
+    go (ExtendAlt _ (UnsafeMkSList n)) (TransedUnbuffered v) =
+      TransedUnbuffered (V.take n v)
+    go (ExtendAlt _ (UnsafeMkSList n)) (TransedBuffered bn b v)
+      | n <= bn = TransedUnbuffered (V.take n (G.unstream b))
+      | otherwise = TransedBuffered bn b (V.take (n - bn) v)
     go (Under (UnsafeMkSList n) t) (TransedUnbuffered v)
       | (l, r) <- V.splitAt n v =
         conc n (G.stream l) (go t (TransedUnbuffered r))
@@ -305,9 +461,10 @@ transformHandlerVector t0 = \(HandlerVector v) ->
         in TransedBuffered (l + m)
             (G.stream (V.slice m l v') B.++ G.stream (V.take m v'))
             (V.drop (l + m) v')
+    go (Split _ f g) v = combine (go f v) (go g v)
 
     mkExpose :: ElemOf e r
-             -> (forall s. ST s (MV.MVector s (Handler m res)))
+             -> (forall s. ST s (MV.MVector s (Handler' m res)))
              -> TransformingVector m res
     mkExpose (UnsafeMkElemOf pr) mkMv = TransedUnbuffered $ V.create $ do
       mv <- mkMv
@@ -316,33 +473,127 @@ transformHandlerVector t0 = \(HandlerVector v) ->
       return $ MV.tail mv
 
 ------------------------------------------------------------------------------
+-- | Rewrite the effect stack of a 'Sem' using with an explicit row transformer
+transformSem :: forall r' r
+              . RowTransformer r r' -> (forall x. Sem r x -> Sem r' x)
+transformSem Id = id
+transformSem t = go
+  where
+    go :: forall x. Sem r x -> Sem r' x
+    go = hoistSem $ \(Handlers n hs) ->
+      Handlers (n . go_) (transformHandlerVector t hs)
+    -- {-# INLINE go #-}
+
+    go_ :: forall x. Sem r x -> Sem r' x
+    go_ = go
+    {-# NOINLINE go_ #-}
+{-# INLINEABLE[1] transformSem #-}
+
+{-# RULES
+"transformSem/transformSem"
+  forall f g m.
+    transformSem f (transformSem g m) = transformSem (joinRow f g) m
+#-}
+
+------------------------------------------------------------------------------
 -- | Like 'runSem' but arguments rearranged for better ergonomics sometimes.
 usingSem
     :: (a -> res)
-    -> (∀ x. Union r (Sem r) x -> (x -> res) -> res)
+    -> Handlers r (Sem r) res
     -> Sem r a
     -> res
 usingSem c k m = runSem m k c
 {-# INLINE usingSem #-}
 
-throughSem
-  :: forall r' r
-   . (  forall res y
-      . (∀ x. Union r' (Sem r') x -> (x -> res) -> res)
-     -> Union r (Sem r) y -> (y -> res) -> res
-     )
-  -> (forall x. Sem r x -> Sem r' x)
-throughSem n = \sem -> Sem $ \k -> runSem sem (n k)
-{-# INLINE throughSem #-}
-
 ------------------------------------------------------------------------------
--- | Extend the stack of a 'Sem' with an explicit 'Union' transformation.
+-- | Extend the stack of a 'Sem' with an explicit 'Handlers' transformation.
 hoistSem
-    :: (∀ x. Union r (Sem r) x -> Union r' (Sem r') x)
-    -> Sem r a
-    -> Sem r' a
-hoistSem n = \m -> Sem $ \k -> runSem m (k . n)
-{-# INLINE hoistSem #-}
+  :: forall r' r
+   . (forall res. Handlers r' (Sem r') res -> Handlers r (Sem r) res)
+  -> (forall x. Sem r x -> Sem r' x)
+hoistSem n = \sem -> Sem $ \k c ->
+  let
+    !k' = n k
+  in
+    runSem sem k' c
+-- {-# INLINE hoistSem #-}
+
+interpretViaHandlerFast
+  :: forall e r
+   . (   forall z x res
+       . (forall y. Sem r y -> z y)
+      -> HandlerVector r z res
+      -> Weaving e z x -> (x -> res) -> res
+     )
+  -> InterpreterFor e r
+interpretViaHandlerFast h = go
+  where
+    go :: InterpreterFor e r
+    go = hoistSem $ \(Handlers n v) ->
+      let
+        AHandler !ah = AHandler (h n v)
+      in
+        Handlers (n . go_) (consHandler' ah v)
+    {-# INLINE go #-}
+
+    go_ :: InterpreterFor e r
+    go_ = go
+    {-# NOINLINE go_ #-}
+-- {-# INLINE interpretViaHandlerFast #-}
+
+reinterpretViaHandlerFast
+  :: forall e1 e2 r
+   . (   forall z x res
+       . (forall y. Sem (e2 ': r) y -> z y)
+      -> HandlerVector (e2 ': r) z res
+      -> Weaving e1 z x -> (x -> res) -> res
+     )
+  -> (forall x. Sem (e1 ': r) x -> Sem (e2 ': r) x)
+reinterpretViaHandlerFast h = go
+  where
+    go :: forall x. Sem (e1 ': r) x -> Sem (e2 ': r) x
+    go = hoistSem $ \(Handlers n v) ->
+      let
+        AHandler !ah = AHandler (h n v)
+      in
+        Handlers (n . go_) (consHandler' ah (dropHandlers' @'[_] v))
+    {-# INLINE go #-}
+
+    go_ :: forall x. Sem (e1 ': r) x -> Sem (e2 ': r) x
+    go_ = go
+    {-# NOINLINE go_ #-}
+-- {-# INLINE reinterpretViaHandlerFast #-}
+
+interpretViaHandlerSlow
+  :: forall e r
+   . (   forall x res
+       . Handlers r (Sem r) res
+      -> Weaving e (Sem (e ': r)) x -> (x -> res) -> res
+     )
+  -> InterpreterFor e r
+interpretViaHandlerSlow h = go
+  where
+    go :: InterpreterFor e r
+    go = hoistSem $ \hs ->
+      let
+        AHandler !ah = AHandler (h hs)
+      in
+        mkHandlers $ consHandler' ah (hoistHandlers' go_ hs)
+    {-# INLINE go #-}
+
+    go_ :: InterpreterFor e r
+    go_ = go
+    {-# NOINLINE go_ #-}
+{-# INLINE interpretViaHandlerSlow #-}
+
+hoistHandlers :: (forall x. m x -> n x) -> Handlers r n res -> Handlers r m res
+hoistHandlers n (Handlers n' hs) = Handlers (n' . n) hs
+{-# INLINE hoistHandlers #-}
+
+hoistHandlers' :: (forall x. m x -> n x)
+               -> Handlers r n res -> HandlerVector r m res
+hoistHandlers' n = getHandlerVector . hoistHandlers n
+{-# INLINE hoistHandlers' #-}
 
 instance Functor (Sem f) where
   fmap f m = Sem $ \k c -> runSem m k (c . f)
@@ -457,7 +708,7 @@ decomp (Union p a) =
 -- | Polysemy's core type that stores effect values together with information
 -- about the higher-order interpretation state of its construction site.
 data Weaving e m a where
-  Sent :: e z a -> !(forall x. z x -> m x) -> Weaving e m a
+  Sent :: e z a -> (forall x. z x -> m x) -> Weaving e m a
   Weaved
     :: forall t e z a resultType m.
        (Coercible (t a) resultType,
@@ -467,7 +718,7 @@ data Weaving e m a where
        -- a variant of 'Polysemy.Internal.send'.
        -- ^ @z@ is usually @Sem rInitial@, where @rInitial@ is the effect row
        -- that was in scope when this 'Weaving' was originally created.
-       , traverseState :: (Traversal t)
+       , traverseState :: Traversal t
        -- ^ An implementation of 'traverse' for @t@.
        , weaveInitState :: forall x. x -> t x
        -- ^ A piece of state that other effects' interpreters have already
@@ -519,28 +770,35 @@ hoistWeaving n' = \case
   Weaved e trav mkS wv lwr -> Weaved e trav mkS (n' . wv) lwr
 {-# INLINE hoistWeaving #-}
 
+newtype AHandler e m res = AHandler (Handler e m res)
+
 rewriteComposeWeave :: Sem (Weave (Compose t t') r ': r) x
                     -> Sem (Weave t' (Weave t r ': r) ': Weave t r ': r) x
 rewriteComposeWeave = go
   where
-    go :: Sem (Weave (Compose t t') r ': r) x
+    go :: forall t t' r x
+        . Sem (Weave (Compose t t') r ': r) x
        -> Sem (Weave t' (Weave t r ': r) ': Weave t r ': r) x
-    go = throughSem $ \k u c -> case u of
-      Union Here wav -> fromFOEff wav $ \ex -> \case
-        RestoreW (Compose tt') ->
-          k (injUsing (There Here) (RestoreW tt')) \t' ->
-          k (injUsing Here (RestoreW t')) (c . ex)
-        GetStateW main ->
-          (`k` id) $ injUsing (There Here) $ GetStateW $ \mkS ->
-          (`k` c) $ injUsing Here $ GetStateW $ \mkS' ->
-          ex $ main $ Compose #. mkS . mkS'
-        LiftWithW main ->
-          (`k` id) $ injUsing (There Here) $ LiftWithW \lwr ->
-          (`k` c) $ injUsing Here $ LiftWithW $ \lwr' ->
-          ex $ main (fmap Compose #. lwr . lwr' . go_)
-        EmbedW m ->
-          k (injUsing Here (EmbedW (sendUsing Here (EmbedW m)))) (c . ex)
-      Union (There pr) wav -> k (hoist go_ (Union (There (There pr)) wav)) c
+    go = hoistSem $ \(Handlers n hs) ->
+      let
+        AHandler !ht' = AHandler $ getHandler' hs Here
+        AHandler !ht = AHandler $ getHandler' hs (There Here)
+        AHandler h = AHandler $ \wav c -> fromFOEff wav $ \ex -> \case
+          RestoreW (Compose tt') ->
+            ht (mkW $ RestoreW tt') \t' ->
+            ht' (mkW $ RestoreW t') (c . ex)
+          GetStateW main ->
+            (`ht` id) $ mkW $ GetStateW $ \mkS ->
+            (`ht'` c) $ mkW $ GetStateW $ \mkS' ->
+            ex $ main $ Compose #. mkS . mkS'
+          LiftWithW main ->
+            (`ht` id) $ mkW $ LiftWithW \lwr ->
+            (`ht'` c) $ mkW $ LiftWithW \lwr' ->
+            ex $ main (fmap Compose #. lwr . lwr' . go_)
+          EmbedW m ->
+            ht' (mkW $ EmbedW (sendUsing Here (EmbedW m))) (c . ex)
+      in
+        Handlers (n . go_) $ consHandler' h (dropHandlers' @'[_, _] hs)
     {-# INLINE go #-}
 
     go_ :: Sem (Weave (Compose t t') r ': r) x
@@ -559,9 +817,9 @@ weave :: (Traversable t, Representational1 n, Representational1 t)
       => t ()
       -> (forall x. t (m x) -> n (t x))
       -> (forall r' x. Sem (Weave t r' ': r') x -> Sem r' (t x))
-      -> Union r m a
-      -> Union r n (t a)
-weave s' wv' lwr' = \(Union pr wav) -> Union pr $ case wav of
+      -> Weaving e m a
+      -> Weaving e n (t a)
+weave s' wv' lwr' = \case
   Sent e n -> Weaved e (Traversal traverse) (<$ s') (wv' . fmap n) lwr'
   Weaved e (Traversal trav) mkS wv lwr ->
     let
@@ -579,7 +837,7 @@ weave s' wv' lwr' = \(Union pr wav) -> Union pr $ case wav of
         => t ()
         -> (forall x. t (m x) -> Sem r'' (t x))
         -> (forall r' x. Sem (Weave t r' ': r') x -> Sem r' (t x))
-        -> Union r m a -> Union r (Sem r'') (t a)
+        -> Weaving e m a -> Weaving e (Sem r'') (t a)
   #-}
 
 
@@ -615,48 +873,16 @@ rewriteWeaving' t = \case
 -- {-# INLINE rewriteWeaving #-}
 
 ------------------------------------------------------------------------------
--- | Lift an effect @e@ into a 'Union' capable of holding it.
-inj :: forall e r z a. Member e r => e z a -> Union r z a
-inj = injUsing membership
-{-# INLINEABLE inj #-}
--- {-# INLINE inj #-}
-
-------------------------------------------------------------------------------
--- | Lift an effect @e@ into a 'Union' capable of holding it,
--- given an explicit proof that the effect exists in @r@
-injUsing :: forall e r z a.
-  ElemOf e r -> e z a -> Union r z a
-injUsing pr = injViaUsing pr id
-{-# INLINEABLE injUsing #-}
--- {-# INLINE injUsing #-}
-
-------------------------------------------------------------------------------
--- | Lift an effect @e@ into a 'Union' capable of holding it given a natural
+-- | Create a @Weaving e m a@ from an @e m a@
 -- transformation to transform the monad.
-injVia :: forall e r z m a
-        . Member e r => (forall x. z x -> m x) -> e z a -> Union r m a
-injVia = injViaUsing membership
-{-# INLINEABLE injVia #-}
+mkW :: forall e m a. e m a -> Weaving e m a
+mkW e = Sent e id
+{-# INLINE mkW #-}
+
+mkWVia :: forall e z m a. (forall x. z x -> m x) -> e z a -> Weaving e m a
+mkWVia n e = Sent e n
+{-# INLINE mkWVia #-}
 -- {-# INLINE injVia #-}
-
-------------------------------------------------------------------------------
--- | Lift an effect @e@ into a 'Union' capable of holding it,
--- given an explicit proof that the effect exists in @r@, and a
--- natural transformation to transform the monad.
-injViaUsing :: forall e r z m a
-             . ElemOf e r
-            -> (forall x. z x -> m x)
-            -> e z a -> Union r m a
-injViaUsing pr n e = Union pr (Sent e n)
-{-# INLINEABLE injViaUsing #-}
--- {-# INLINE injViaUsing #-}
-
-------------------------------------------------------------------------------
--- | Lift a @'Weaving' e@ into a 'Union' capable of holding it.
-injWeaving :: forall e r m a. Member e r => Weaving e m a -> Union r m a
-injWeaving = Union membership
-{-# INLINEABLE injWeaving #-}
--- {-# INLINE injWeaving #-}
 
 ------------------------------------------------------------------------------
 -- | Execute an action of an effect.
@@ -677,7 +903,7 @@ injWeaving = Union membership
 --
 -- 'Polysemy.makeSem' allows you to eliminate this boilerplate.
 send :: Member e r => e (Sem r) a -> Sem r a
-send = liftSem . inj
+send = liftWeaving membership . mkW
 -- {-# INLINE[3] send #-}
 {-# INLINEABLE[3] send #-}
 
@@ -691,7 +917,7 @@ sendVia :: forall e z r a
          . Member e r
         => (forall x. z x -> Sem r x)
         -> e z a -> Sem r a
-sendVia n = liftSem . injVia n
+sendVia n = liftWeaving membership . mkWVia n
 -- {-# INLINE[3] sendVia #-}
 {-# INLINEABLE[3] sendVia #-}
 
@@ -702,7 +928,7 @@ sendVia n = liftSem . injVia n
 -- This is useful in conjunction with 'Polysemy.Membership.tryMembership',
 -- in order to conditionally make use of effects.
 sendUsing :: ElemOf e r -> e (Sem r) a -> Sem r a
-sendUsing pr = liftSem . injUsing pr
+sendUsing pr = liftWeaving pr . mkW
 -- {-# INLINE[3] sendUsing #-}
 {-# INLINEABLE[3] sendUsing #-}
 
@@ -711,7 +937,7 @@ sendUsing pr = liftSem . injUsing pr
 -- that the effect exists in @r@, and a natural transformation from the monad
 -- used for the higher-order thunks in the effect to @'Polysemy.Sem' r@.
 sendViaUsing :: ElemOf e r -> (forall x. z x -> Sem r x) -> e z a -> Sem r a
-sendViaUsing pr n = liftSem . injViaUsing pr n
+sendViaUsing pr n = liftWeaving pr . mkWVia n
 -- {-# INLINE[3] sendViaUsing #-}
 {-# INLINEABLE[3] sendViaUsing #-}
 
@@ -726,8 +952,21 @@ embed = send .# Embed
 -- {-# INLINE embed #-}
 
 ------------------------------------------------------------------------------
--- | Create a 'Sem' from a 'Union' with matching stacks.
-liftSem :: Union r (Sem r) a -> Sem r a
-liftSem u = Sem $ \k c -> k u c -- Eta-expansion for better inlining
-{-# INLINEABLE liftSem #-}
+-- | Create a @'Sem' r@ from a @'Weaving' e ('Sem' r)@ given a proof that @e@ is
+-- is a member of @r@
+liftWeaving :: ElemOf e r -> Weaving e (Sem r) a -> Sem r a
+liftWeaving pr wav = Sem $ \k -> getHandler k pr wav
+{-# INLINEABLE liftWeaving #-}
 -- {-# INLINE liftSem #-}
+
+------------------------------------------------------------------------------
+-- | Type synonym for interpreters that consume an effect without changing the
+-- return value. Offered for user convenience.
+--
+-- @r@ Is kept polymorphic so it's possible to place constraints upon it:
+--
+-- @
+-- teletypeToIO :: 'Member' (Embed IO) r
+--              => 'InterpreterFor' Teletype r
+-- @
+type InterpreterFor e r = ∀ a. Sem (e ': r) a -> Sem r a

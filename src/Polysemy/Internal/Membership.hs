@@ -18,7 +18,22 @@
 {-# LANGUAGE QuantifiedConstraints   #-}
 
 {-# OPTIONS_HADDOCK not-home #-}
-module Polysemy.Internal.Membership where
+module Polysemy.Internal.Membership
+  ( ElemOf(.., Here, There)
+  , sameMember
+  , absurdMembership
+  , isMemberAt
+  , memberAt
+  , swapStacks
+  , splitMembership
+  , injectMembership
+  , underMembership
+  , extendMembershipLeft
+  , extendMembershipRight
+  , Member(..)
+  , KnownRow
+  , tryMembership
+  ) where
 
 import Polysemy.Internal.Sing
 import Data.Typeable
@@ -198,11 +213,6 @@ splitMembership :: forall right left e
 splitMembership (UnsafeMkSList l) (UnsafeMkElemOf pr)
   | pr < l    = Left (UnsafeMkElemOf pr)
   | otherwise = Right $! UnsafeMkElemOf (pr - l)
-
--- | A variant of id that gets inlined late for rewrite rule purposes
-idMembership :: ElemOf (e :: Effect) r -> ElemOf e r
-idMembership = id
-{-# INLINE[0] idMembership #-}
 
 swapStacks :: forall r l mid e
             . SList l -> SList mid -> ElemOf e (Append l (Append mid r)) -> ElemOf e (Append mid (Append l r))

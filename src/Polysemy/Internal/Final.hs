@@ -353,22 +353,35 @@ runLowering :: forall m n a
 runLowering lowering = \case
   Untransformed to ->
     let
-      go :: forall x. Lowering m Identity n x -> m x
-      go = usingSem return \(Union pr wav) c -> case pr of
-        Here -> fromFOEff wav $ \ex -> \case
-          RestoreL (Identity a) -> c (ex a)
-          LiftWithL main' -> main' (fmap Identity . go) >>= c . ex
-          WithProcessorL main' -> main' (fmap Identity . to) >>= c . ex
-        There Here -> fromFOEff wav $ \ex (Embed m) -> m >>= c . ex
-        There (There Here) -> case wav of
-          Sent (WithWeavingToFinal main) to' ->
-            main (Untransformed (go . to')) >>= c .# runIdentity
-          Weaved (WithWeavingToFinal main) trav mkS wv lwr ->
-            main (Transformed trav mkS (go . wv) lwr) >>= c .# coerce
-        There (There (There pr')) -> absurdMembership pr'
+      sH :: forall res. Handler (Lower m Identity n) m (m res)
+      sH wav c = fromFOEff wav $ \ex -> \case
+        RestoreL (Identity a) -> c (ex a)
+        LiftWithL main' -> main' (fmap Identity . go) >>= c . ex
+        WithProcessorL main' -> main' (fmap Identity . to) >>= c . ex
 
+      eH :: forall res. Handler (Embed m) m (m res)
+      eH wav c = fromFOEff wav $ \ex (Embed m) -> m >>= c . ex
+
+      fH :: forall res. Handler (Final m) m (m res)
+      fH wav c = case wav of
+        Sent (WithWeavingToFinal main) to' ->
+          main (Untransformed to') >>= c .# runIdentity
+        Weaved (WithWeavingToFinal main) trav mkS wv lwr ->
+          main (Transformed trav mkS wv lwr) >>= c .# coerce
+
+      handlers :: forall res
+                . Handlers '[Lower m Identity n, Embed m, Final m]
+                    (Lowering m Identity n) (m res)
+      handlers = Handlers go $
+        sH `consHandler'` eH `consHandler'` fH `consHandler'` emptyHandlers'
+      {-# INLINE handlers #-}
+
+      go :: forall x. Lowering m Identity n x -> m x
+      go = usingSem return handlers
+      {-# NOINLINE go #-}
     in
-      go (Identity <$> lowering)
+      runSem lowering handlers (return .# Identity)
+
   Transformed (trav :: Traversal t) _ wv lwr0 -> reify trav \(_ :: pr s) ->
     let
       go :: forall x
@@ -427,17 +440,31 @@ withLoweringToFinal main = withWeavingToFinal (runLowering main)
 ------------------------------------------------------------------------------
 -- | Lower a 'Sem' containing only a single lifted 'Monad' into that
 -- monad.
-runM :: Monad m => Sem '[Embed m, Final m] a -> m a
-runM = usingSem return $ \u c -> case decomp u of
-  Right wav -> fromFOEff wav $ \ex (Embed m) -> m >>= c . ex
-  Left g -> case extract g of
-    Sent (WithWeavingToFinal main) n ->
-      main (Untransformed (runM . n)) >>= c .# runIdentity
-    Weaved (WithWeavingToFinal main) trav mkS wv lwr ->
-      main (Transformed trav mkS (runM . wv) lwr) >>= c .# coerce
-{-# NOINLINE[3] runM #-}
-{-# SPECIALIZE[~3] runM :: Sem '[Embed IO, Final IO] a -> IO a #-}
-{-# SPECIALIZE[~3] runM :: Sem '[Embed Identity, Final Identity] a -> Identity a #-}
+runM :: forall m a. Monad m => Sem '[Embed m, Final m] a -> m a
+runM = usingSem return handlers
+  where
+    eH :: forall res. Handler (Embed m) m (m res)
+    eH wav c = fromFOEff wav $ \ex (Embed m) -> m >>= c . ex
+
+    fH :: forall res. Handler (Final m) m (m res)
+    fH wav c = case wav of
+      Sent (WithWeavingToFinal main) to' ->
+        main (Untransformed to') >>= c .# runIdentity
+      Weaved (WithWeavingToFinal main) trav mkS wv lwr ->
+        main (Transformed trav mkS wv lwr) >>= c .# coerce
+
+    handlers :: forall res
+              . Handlers '[Embed m, Final m] (Sem '[Embed m, Final m]) (m res)
+    handlers = Handlers go $
+      eH `consHandler'` fH `consHandler'` emptyHandlers'
+    {-# INLINE handlers #-}
+
+    go :: forall x. Sem '[Embed m, Final m] x -> m x
+    go = usingSem return handlers
+    {-# NOINLINE go #-}
+{-# INLINEABLE runM #-}
+{-# SPECIALIZE runM :: Sem '[Embed IO, Final IO] a -> IO a #-}
+{-# SPECIALIZE runM :: Sem '[Embed Identity, Final Identity] a -> Identity a #-}
 
 
 -----------------------------------------------------------------------------

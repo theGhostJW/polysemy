@@ -7,7 +7,7 @@ module Polysemy.NonDet
     NonDet (..)
 
     -- * Interpretations
-  , runNonDet
+  -- , runNonDet
   , runNonDetMaybe
   , nonDetToError
   ) where
@@ -27,8 +27,8 @@ import Polysemy.Internal.Core
 
 ------------------------------------------------------------------------------
 -- | Run a 'NonDet' effect in terms of some underlying 'Alternative' @f@.
-runNonDet :: Alternative f => Sem (NonDet ': r) a -> Sem r (f a)
-runNonDet = runNonDetC . runNonDetInC
+-- runNonDet :: Alternative f => Sem (NonDet ': r) a -> Sem r (f a)
+-- runNonDet = runNonDetC . runNonDetInC
   -- runSem sem0
   --   (\u c1 c2 -> case decomp u of
   --       Left g -> (`k` (\l -> foldr (\x c2' c3 -> c1 x $ \l -> c2' $ \l' -> c3 (l ++ l')) ($ []) l c2)) $
@@ -80,8 +80,8 @@ nonDetToError (e :: e) = transform $ \case
   Choose left right -> Catch left (\_ -> right)
 
 -- This stuff is lifted from 'fused-effects'. Thanks guys!
-runNonDetC :: (Alternative f, Applicative m) => NonDetC m a -> m (f a)
-runNonDetC (NonDetC m) = m (fmap . (<|>) . pure) (pure empty)
+-- runNonDetC :: (Alternative f, Applicative m) => NonDetC m a -> m (f a)
+-- runNonDetC (NonDetC m) = m (fmap . (<|>) . pure) (pure empty)
 
 
 newtype NonDetC m a = NonDetC
@@ -133,40 +133,40 @@ instance MonadTrans NonDetC where
 --     (\a c -> c [a])
 --     c0
 
-runWeaveNonDetInC :: Sem (Weave [] r ': r) a -> NonDetC (Sem r) a
-runWeaveNonDetInC = usingSem return $ \u c -> case decomp u of
-  Left g -> NonDetC $ \c' b' ->
-    liftSem (weave
-               [()]
-               (fmap join . traverse runWeaveNonDet)
-               runWeaveNonDet
-               g)
-    >>= foldr (\a -> unNonDetC (c a) c') b'
-  Right wav -> fromFOEff wav $ \ex -> \case
-    RestoreW t -> foldr (\a -> (c (ex a) <|>)) empty t
-    GetStateW main -> c $ ex $ main (:[])
-    LiftWithW main -> c $ ex $ main runWeaveNonDet
-    EmbedW m -> lift m >>= (c . ex)
+-- runWeaveNonDetInC :: Sem (Weave [] r ': r) a -> NonDetC (Sem r) a
+-- runWeaveNonDetInC = usingSem return $ \u c -> case decomp u of
+--   Left g -> NonDetC $ \c' b' ->
+--     liftSem (weave
+--                [()]
+--                (fmap join . traverse runWeaveNonDet)
+--                runWeaveNonDet
+--                g)
+--     >>= foldr (\a -> unNonDetC (c a) c') b'
+--   Right wav -> fromFOEff wav $ \ex -> \case
+--     RestoreW t -> foldr (\a -> (c (ex a) <|>)) empty t
+--     GetStateW main -> c $ ex $ main (:[])
+--     LiftWithW main -> c $ ex $ main runWeaveNonDet
+--     EmbedW m -> lift m >>= (c . ex)
 
-runWeaveNonDet :: Sem (Weave [] r ': r) a -> Sem r [a]
-runWeaveNonDet = runNonDetC . runWeaveNonDetInC
+-- runWeaveNonDet :: Sem (Weave [] r ': r) a -> Sem r [a]
+-- runWeaveNonDet = runNonDetC . runWeaveNonDetInC
 
-runNonDetInC :: Sem (NonDet ': r) a -> NonDetC (Sem r) a
-runNonDetInC = usingSem return $ \u c ->
-  case decomp u of
-    Left g -> NonDetC $ \c' b' ->
-      liftSem (weave
-                 [()]
-                 (fmap join . traverse runNonDet)
-                 runWeaveNonDet
-                 g)
-      >>= foldr (\a -> unNonDetC (c a) c') b'
-    Right wav -> case wav of
-      Sent e n -> case e of
-        Empty -> NonDetC $ \_ b -> b
-        Choose l r -> (runNonDetInC (n l) <|> runNonDetInC (n r)) >>= c
-      Weaved e _ mkS wv _ -> case e of
-        Empty -> NonDetC $ \_ b -> b
-        Choose l r ->
-          (runNonDetInC (wv (mkS l)) <|> runNonDetInC (wv (mkS r)))
-          >>= c .# coerce
+-- runNonDetInC :: Sem (NonDet ': r) a -> NonDetC (Sem r) a
+-- runNonDetInC = usingSem return $ \u c ->
+--   case decomp u of
+--     Left g -> NonDetC $ \c' b' ->
+--       liftSem (weave
+--                  [()]
+--                  (fmap join . traverse runNonDet)
+--                  runWeaveNonDet
+--                  g)
+--       >>= foldr (\a -> unNonDetC (c a) c') b'
+--     Right wav -> case wav of
+--       Sent e n -> case e of
+--         Empty -> NonDetC $ \_ b -> b
+--         Choose l r -> (runNonDetInC (n l) <|> runNonDetInC (n r)) >>= c
+--       Weaved e _ mkS wv _ -> case e of
+--         Empty -> NonDetC $ \_ b -> b
+--         Choose l r ->
+--           (runNonDetInC (wv (mkS l)) <|> runNonDetInC (wv (mkS r)))
+--           >>= c .# coerce

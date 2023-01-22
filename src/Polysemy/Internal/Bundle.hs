@@ -6,7 +6,7 @@
 module Polysemy.Internal.Bundle where
 
 import Polysemy (Members)
-import Polysemy.Internal.Union (ElemOf(..), membership)
+import Polysemy.Internal.Membership (ElemOf(Here, There), membership)
 
 ------------------------------------------------------------------------------
 -- | Transform a membership proof's stack by arbitrary effects using evidence

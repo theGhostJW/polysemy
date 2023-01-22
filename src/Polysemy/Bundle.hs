@@ -69,12 +69,18 @@ collectBundle :: forall l r a
                . KnownList l
               => Sem (Append l r) a
               -> Sem (Bundle l ': r) a
-collectBundle =
-  hoistSem \(Union pr wav) ->
-    hoist (collectBundle @l)
-      case splitMembership @r (singList @l) pr of
-        Left pr' -> Union Here (rewriteWeaving (Bundle pr') wav)
-        Right pr' -> Union (There pr') wav
+collectBundle = hoistSem \(Handlers n hs) ->
+  let
+    AHandler h = AHandler $ getHandler' hs Here
+    lhandlers = generateHandlers' (singList @l)
+                  (\pr -> h . rewriteWeaving (Bundle pr))
+  in
+    Handlers (n . collectBundle @l) $
+      concatHandlers' lhandlers (dropHandlers' @'[_] hs)
+    -- hoist (collectBundle @l)
+    --   case splitMembership @r (singList @l) pr of
+    --     Left pr' -> Union Here (rewriteWeaving (Bundle pr') wav)
+    --     Right pr' -> Union (There pr') wav
 
 ------------------------------------------------------------------------------
 -- | Send uses of @'Bundle' l@ to @'Bundle' r@ given an explicit membership
@@ -93,12 +99,13 @@ runBundle
    . KnownList r'
   => Sem (Bundle r' ': r) a
   -> Sem (Append r' r) a
-runBundle = hoistSem $ \u -> hoist runBundle $ case decomp u of
-  Right (Sent (Bundle pr e) n) ->
-    Union (extendMembershipRight @r' @r pr) $ Sent e n
-  Right (Weaved (Bundle pr e) trav mkS wv lwr) ->
-    Union (extendMembershipRight @r' @r pr) $ Weaved e trav mkS wv lwr
-  Left g -> weakenList @r' @r (singList @r') g
+runBundle = hoistSem $ \(Handlers n hs) ->
+  let
+    AHandler h = AHandler $ \wav -> case rewriteWeaving' id wav of
+      Union pr wav' -> getHandler' hs (extendMembershipRight @r' @r pr) wav'
+  in
+    Handlers (n . runBundle @r') $
+      consHandler' h (dropHandlers' @r' hs)
 
 ------------------------------------------------------------------------------
 -- | Run a @'Bundle' l@ if the effect stack contains all effects of @r@.
@@ -107,9 +114,6 @@ subsumeBundle
    . Members r' r
   => Sem (Bundle r' ': r) a
   -> Sem r a
-subsumeBundle = hoistSem $ \u -> hoist subsumeBundle $ case decomp u of
-  Right (Sent (Bundle pr e) n) ->
-    Union (simpleSubsumeMembership pr) $ Sent e n
-  Right (Weaved (Bundle pr e) trav mkS wv lwr) ->
-    Union (simpleSubsumeMembership pr) $ Weaved e trav mkS wv lwr
-  Left g -> g
+subsumeBundle = interpretViaHandlerFast $ \_ hs w ->
+  case rewriteWeaving' id w of
+    Union pr w' -> getHandler' hs (simpleSubsumeMembership pr) w'

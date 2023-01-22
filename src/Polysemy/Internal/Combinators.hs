@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes   #-}
+{-# LANGUAGE BangPatterns   #-}
 {-# OPTIONS_HADDOCK not-home #-}
 
 -- | Description: The basic interpreter-building combinators
@@ -22,28 +23,32 @@ import Polysemy.Internal.Sing
 import Polysemy.Internal.Core
 import Polysemy.Internal.Membership
 import Polysemy.Internal.Utils
+import Polysemy.Internal.WeaveClass
 
 runWeaveState :: s -> Sem (Weave ((,) s) r ': r) a -> Sem r (s, a)
 runWeaveState s0' sem0' = go s0' sem0'
   where
     go :: s -> Sem (Weave ((,) s) r ': r) a -> Sem r (s, a)
     go s0 sem0 = Sem $ \k c0 ->
-      runSem sem0
-        (\u c s -> case decomp u of
-            Left g -> (`k` (\(s', x) -> c x s')) $
-              weave
-                (s, ())
-                (uncurry go_)
-                (go_ s)
-                g
-            Right wav -> fromFOEff wav $ \ex -> \case
-              RestoreW (s', a) -> c (ex a) s'
-              GetStateW main -> c (ex (main ((,) s))) s
-              LiftWithW main -> c (ex (main (go_ s))) s
-              EmbedW m -> runSem m k (\a -> c (ex a) s)
-        )
-        (\a s -> c0 (s, a))
-        s0
+      let
+        g' = mapHandlers
+          (\f wav c s ->
+            f (weave (s, ()) (uncurry runWeaveState) (runWeaveState s) wav)
+              (\(s', x) -> c x s')
+          ) k
+
+        AHandler !h = AHandler $ \wav c s -> fromFOEff wav $ \ex -> \case
+          RestoreW (s', a) -> c (ex a) s'
+          GetStateW main -> c (ex (main ((,) s))) s
+          LiftWithW main -> c (ex (main (go_ s))) s
+          EmbedW m -> runSem m k (\a -> c (ex a) s)
+
+        !k' = mkHandlers $ consHandler' h g'
+      in
+        runSem sem0
+          k'
+          (\a s -> c0 (s, a))
+          s0
     {-# INLINE go #-}
 
     go_ :: s -> Sem (Weave ((,) s) r ': r) a -> Sem r (s, a)
@@ -53,22 +58,28 @@ runWeaveState s0' sem0' = go s0' sem0'
 
 runWeaveLazyState :: s -> Sem (Weave (LazyT2 s) r ': r) a -> Sem r (LazyT2 s a)
 runWeaveLazyState s0 sem0 = Sem $ \k c0 ->
-  runSem sem0
-    (\u c s -> case decomp u of
-        Left g -> (`k` (\(LazyT2 ~(s', x)) -> c x s')) $
-          weave
+  let
+    g' = mapHandlers
+      (\f wav c s ->
+        f (weave
             (LazyT2 (s, ()))
             (\(LazyT2 ~(s', sem)) -> coerce $ runWeaveLazyState s' sem)
             (coerce #. runWeaveLazyState s)
-            g
-        Right wav -> fromFOEff wav $ \ex -> \case
-          RestoreW (LazyT2 ~(s', a)) -> c (ex a) s'
-          GetStateW main -> c (ex (main (LazyT2 #. (,) s))) s
-          LiftWithW main -> c (ex (main (runWeaveLazyState s))) s
-          EmbedW m -> runSem m k (\a -> c (ex a) s)
-    )
-    (\a s -> c0 (LazyT2 (s, a)))
-    s0
+            wav
+          )
+          (\(LazyT2 ~(s', x)) -> c x s')
+      ) k
+
+    AHandler h = AHandler $ \wav c s -> fromFOEff wav $ \ex -> \case
+      RestoreW (LazyT2 ~(s', a)) -> c (ex a) s'
+      GetStateW main -> c (ex (main (LazyT2 #. (,) s))) s
+      LiftWithW main -> c (ex (main (runWeaveLazyState s))) s
+      EmbedW m -> runSem m k (\a -> c (ex a) s)
+  in
+    runSem sem0
+      (mkHandlers $ consHandler' h g')
+      (\a s -> c0 $ LazyT2 (s, a))
+      s0
 
 ------------------------------------------------------------------------------
 -- | Like 'interpret', but with access to an intermediate state @s@.
@@ -80,19 +91,22 @@ stateful f = go
   where
     go :: forall x. s -> Sem (e ': r) x -> Sem r (s, x)
     go s0 sem0 = Sem $ \k c0 ->
-      runSem sem0
-        (\u c s -> case decomp u of
-            Left g -> (`k` (\(s', x) -> c x s')) $
-              weave
-                (s, ())
-                (uncurry go_)
-                (runWeaveState s)
-                g
-            Right wav -> fromFOEff wav $ \ex e ->
-              runSem (f e s) k (\(s', x) -> c (ex x) s')
-        )
-        (\a s -> c0 (s, a))
-        s0
+      let
+        g' = mapHandlers
+          (\f wav c s ->
+            f (weave (s, ()) (uncurry go_) (runWeaveState s) wav)
+              (\(s', x) -> c x s')
+          ) k
+
+        AHandler !h = AHandler $ \wav c s -> fromFOEff wav $ \ex e ->
+          runSem (f e s) k (\(s', x) -> c (ex x) s')
+
+        !k' = mkHandlers $ consHandler' h g'
+      in
+        runSem sem0
+          k'
+          (\a s -> c0 (s, a))
+          s0
     {-# INLINE go #-}
 
     go_ :: forall x. s -> Sem (e ': r) x -> Sem r (s, x)
@@ -113,19 +127,25 @@ lazilyStateful f = go
   where
     go :: forall x. s -> Sem (e ': r) x -> Sem r (s, x)
     go s0 sem0 = Sem $ \k c0 ->
-      runSem sem0
-        (\u c s -> case decomp u of
-            Left g -> (`k` (\(LazyT2 ~(s', x)) -> c x s')) $
-              weave
+      let
+        g' = mapHandlers
+          (\f wav c s ->
+            f (weave
                 (LazyT2 (s, ()))
                 (\(LazyT2 ~(s', sem)) -> coerce $ go_ s' sem)
-                (runWeaveLazyState s)
-                g
-            Right wav -> fromFOEff wav $ \ex e ->
-              runSem (f e s) k (\ ~(s', x) -> c (ex x) s')
-        )
-        (\a s -> c0 (s, a))
-        s0
+                (coerce #. runWeaveLazyState s)
+                wav
+              )
+              (\(LazyT2 ~(s', x)) -> c x s')
+          ) k
+
+        AHandler h = AHandler $ \wav c s -> fromFOEff wav $ \ex e ->
+          runSem (f e s) k (\ ~(s', x) -> c (ex x) s')
+      in
+        runSem sem0
+          (mkHandlers $ consHandler' h g')
+          (\a s -> c0 (s, a))
+          s0
     {-# INLINE go #-}
 
     go_ :: forall x. s -> Sem (e ': r) x -> Sem r (s, x)
@@ -145,17 +165,8 @@ rewrite
      . (forall z x. e1 z x -> e2 z x)
     -> Sem (e1 ': r) a
     -> Sem (e2 ': r) a
-rewrite f = go
-  where
-    go :: forall x. Sem (e1 ': r) x -> Sem (e2 ': r) x
-    go = hoistSem $ \u -> hoist go_ $ case decompCoerce u of
-      Left g -> g
-      Right wav -> Union Here $ rewriteWeaving f wav
-    {-# INLINE go #-}
-
-    go_ :: forall x. Sem (e1 ': r) x -> Sem (e2 ': r) x
-    go_ = go
-    {-# NOINLINE go_ #-}
+rewrite f = reinterpretViaHandlerFast $ \_ hs w ->
+  getHandler' hs Here (rewriteWeaving f w)
 {-# INLINEABLE rewrite #-}
 
 rewriteAt
@@ -167,9 +178,12 @@ rewriteAt
 rewriteAt sl f = go
   where
     go :: forall x. Sem (Append l (e1 ': r)) x -> Sem (Append l (e2 ': r)) x
-    go = hoistSem $ \(Union pr wav) -> hoist go_ $ case isMemberAt @r @e1 @e2 sl pr of
-      Left pr' -> Union pr' wav
-      Right Refl -> Union (memberAt @r sl) $ rewriteWeaving f wav
+    go = hoistSem $ \(Handlers n hs) ->
+      let
+        AHandler !h = AHandler $ \w ->
+          getHandler' hs (memberAt @r sl) (rewriteWeaving f w)
+      in
+        Handlers (n . go_) $ insertHandler' @r @e2 sl h hs
     {-# INLINE go #-}
 
     go_ :: forall x. Sem (Append l (e1 ': r)) x -> Sem (Append l (e2 ': r)) x
@@ -198,15 +212,6 @@ transformUsing
     -> (forall z x. e1 z x -> e2 z x)
     -> Sem (e1 ': r) a
     -> Sem r a
-transformUsing pr f = go
-  where
-    go :: forall x. Sem (e1 ': r) x -> Sem r x
-    go = hoistSem $ \u -> hoist go_ $ case decomp u of
-      Left g -> g
-      Right wav -> Union pr $ rewriteWeaving f wav
-    {-# INLINE go #-}
-
-    go_ :: forall x. Sem (e1 ': r) x -> Sem r x
-    go_ = go
-    {-# NOINLINE go_ #-}
+transformUsing pr f = interpretViaHandlerFast $ \_ hs w ->
+  getHandler' hs pr (rewriteWeaving f w)
 {-# INLINEABLE transformUsing #-}

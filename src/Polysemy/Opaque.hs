@@ -17,8 +17,8 @@ import Polysemy
 import Polysemy.Internal
 import Polysemy.Bundle
 import Polysemy.Membership
-import Polysemy.Internal.Union
 import Polysemy.Internal.Opaque
+import Polysemy.Internal.Core
 import Polysemy.Internal.Utils
 import Polysemy.Newtype
 
@@ -57,42 +57,27 @@ collectOpaqueBundleAt
    . (ListOfLength "collectOpaqueBundleAt" n l, KnownList mid)
   => Sem (Append l (Append mid r)) a
   -> Sem (Append l (Opaque (Bundle mid) ': r)) a
-collectOpaqueBundleAt = hoistSem $ \(Union pr wav) ->
-  hoist (collectOpaqueBundleAt @n @mid @r @l)
-    case splitMembership @(Append mid r) (singList @l) pr of
-      Left pr' ->
-        Union (extendMembershipRight @_ @(Opaque (Bundle mid) ': r)
-                pr')
-              wav
-      Right pr' -> case splitMembership @r (singList @mid) pr' of
-        Left pr'' ->
-          Union (extendMembershipLeft @(Opaque (Bundle mid) ': r)
-                  (singList @l) Here)
-                (rewriteWeaving (Opaque #. Bundle pr'') wav)
-        Right pr'' ->
-          Union (extendMembershipLeft @(Opaque (Bundle mid) ': r)
-                  (singList @l)
-                  (There pr''))
-                wav
+collectOpaqueBundleAt = hoistSem $ \(Handlers n hs) ->
+  let
+    (hl, hr) = splitHandlers' @l @(_ ': r) hs
+    AHandler h = AHandler $ getHandler' hr Here
+    hm = generateHandlers' (singList @mid) $ \pr wav ->
+      h (rewriteWeaving (Opaque #. Bundle pr) wav)
+  in
+    Handlers (n . collectOpaqueBundleAt @n @mid @r @l) $
+      hl `concatHandlers'` hm `concatHandlers'` dropHandlers' @'[_] hr
 
 runOpaqueBundleAt
   :: forall n mid r l a
    . (ListOfLength "runOpaqueBundleAt" n l, KnownList mid)
   => Sem (Append l (Opaque (Bundle mid) ': r)) a
   -> Sem (Append l (Append mid r)) a
-runOpaqueBundleAt = hoistSem $ \(Union pr wav) ->
-  hoist (runOpaqueBundleAt @n @mid @r @l)
-    case splitMembership @(Opaque (Bundle mid) ': r) (singList @l) pr of
-      Left pr' ->
-        Union (extendMembershipRight @_ @(Append mid r) pr') wav
-      Right Here -> case wav of
-        Sent (Opaque (Bundle pr' act')) n ->
-          Union (extendMembershipLeft (singList @l)
-                   (extendMembershipRight @_ @r pr')) (Sent act' n)
-        Weaved (Opaque (Bundle pr' act')) trav mkS wv lwr ->
-          Union (extendMembershipLeft (singList @l)
-                   (extendMembershipRight @_ @r pr'))
-                (Weaved act' trav mkS wv lwr)
-      Right (There pr') ->
-        Union (extendMembershipLeft (singList @l)
-                (extendMembershipLeft (singList @mid) pr')) wav
+runOpaqueBundleAt = hoistSem $ \(Handlers n hs) ->
+  let
+    (hl, hr) = splitHandlers' @l @(Append mid r) hs
+    AHandler h = AHandler $ \wav ->
+      case rewriteWeaving' (\(Opaque p) -> p) wav of
+        Union pr wav' -> getHandler' hr (extendMembershipRight @mid @r pr) wav'
+  in
+    Handlers (n . runOpaqueBundleAt @n @mid @r @l) $
+      hl `concatHandlers'` h `consHandler'` dropHandlers' @mid @r hr

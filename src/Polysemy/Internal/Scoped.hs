@@ -1,5 +1,5 @@
 module Polysemy.Internal.Scoped where
-
+{-
 import Polysemy
 import Polysemy.HigherOrder
 import Polysemy.Internal.Core
@@ -67,3 +67,4 @@ exposeRunHandrolled depth = go
     go_ = go
     {-# NOINLINE go_ #-}
 {-# INLINE exposeRunHandrolled #-}
+-}

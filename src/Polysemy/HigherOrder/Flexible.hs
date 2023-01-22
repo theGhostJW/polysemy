@@ -195,9 +195,9 @@ runExposeH' :: forall r z t e rH rC a
              . Raise rH r
             => z a
             -> Sem (e ': HigherOrder z t e rH rC ': r) (t a)
-runExposeH' = raise . processH >=> mapMembership \case
-  Here -> Here
-  There pr -> There (raiseMembership pr)
+runExposeH' =
+      raise . processH
+  >=> transformSem (underRow1 (raiseRow `joinRow` raiseMembership @rH @r))
 
 -- | Locally gain access to a processor: a function that transforms a monadic
 -- action given by the higher-order effect that is currently being interpreted

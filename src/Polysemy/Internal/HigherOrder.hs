@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE BangPatterns, CPP, GeneralizedNewtypeDeriving #-}
 {-# OPTIONS_HADDOCK not-home #-}
 
 module Polysemy.Internal.HigherOrder where
@@ -14,6 +14,7 @@ import Polysemy.Internal.Union
 import Polysemy.Internal.Utils
 import Polysemy.Internal.Core
 import Polysemy.Internal.Reflection
+import Polysemy.Internal.Sing
 
 -- | A reified interpreter, transforming @'Polysemy.Sem' (e ': rH)@ to
 -- @'Polysemy.Sem' rH@.
@@ -455,26 +456,26 @@ interpretH :: forall e r
 interpretH h = go
   where
     go :: forall a'. Sem (e ': r) a' -> Sem r a'
-    go = throughSem $ \k u c -> case decomp u of
-      Left g -> k (hoist go_ g) c
-      Right (Sent (e :: e z y) n) ->
+    go = interpretViaHandlerSlow $ \hs wav c -> case wav of
+      Sent (e :: e z y) n ->
         let
           goSent :: forall rC x
                   . Sem (HigherOrder z Identity e r rC ': rC) x
                  -> Sem rC x
-          goSent = throughSem $ \k' u' c' -> case decomp u' of
-            Left g -> k' (hoist goSent_ g) c'
-            Right wav -> fromFOEff wav $ \ex' -> \case
-              GetInterpreterH -> c' $ ex' $ InterpreterH go_
-              GetProcessorH -> c' $ ex' $
-                ProcessorH (\(Identity t) fz -> (fmap Identity #. n . fz) t)
-              RestoreH (Identity a) -> c' $ ex' a
-              LiftWithH main -> c' $ ex' $ main $ fmap Identity #. goSent_
-              EmbedH m' -> runSem m' k' (c' . ex')
-              GetStateH -> c' $ ex' $ Identity ()
-              PropagateH pr e' n' ->
-                k' (Union pr (Sent e' (fmap runIdentity #. n' id .# Identity)))
-                   (c' . ex')
+          goSent = interpretViaHandlerFast \n' hs' wav' c' ->
+            fromFOEff wav' $ \ex -> \case
+              GetInterpreterH -> c' $ ex $ InterpreterH go_
+              GetProcessorH -> c' $ ex $
+                ProcessorH
+                  (\(Identity t) fz -> (fmap Identity #. n . fz) t)
+              RestoreH (Identity a) -> c' $ ex a
+              LiftWithH main -> c' $ ex $ main $ fmap Identity #. goSent_
+              EmbedH m' -> runSem m' (Handlers n' hs') (c' . ex)
+              GetStateH -> c' $ ex $ Identity ()
+              PropagateH pr e' n'' ->
+                getHandler' hs' pr
+                  (mkWVia (n' . fmap runIdentity #. n'' id .# Identity) e')
+                  (c' . ex)
           {-# INLINE goSent #-}
 
           goSent_ :: forall rC x
@@ -483,39 +484,36 @@ interpretH h = go
           goSent_ = goSent
           {-# NOINLINE goSent_ #-}
         in
-          runSem (goSent (h e)) k c
-      Right (Weaved (e :: e z y) (trav :: Traversal t) _ wv lwr) ->
+          runSem (goSent (h e)) hs c
+      Weaved (e :: e z y) (trav :: Traversal t) _ wv lwr ->
         reify trav $ \(_ :: pr s) ->
           let
             goWeaved :: forall rC x
                       . Sem (HigherOrder z (ViaTraversal s t) e r rC ': rC) x
                      -> Sem (Weave t rC ': rC) x
-            goWeaved = throughSem $ \k' u' c' ->
-              case decompCoerce u' of
-                Left g -> k' (hoist goWeaved_ g) c'
-                Right wav -> fromFOEff wav $ \ex' -> \case
-                  GetInterpreterH -> c' $ ex' $ InterpreterH go_
+            goWeaved = reinterpretViaHandlerFast $ \n' hs' ->
+              let
+                AHandler !wH = AHandler (getHandler' hs' Here)
+              in
+                \wav' c' -> fromFOEff wav' $ \ex -> \case
+                  GetInterpreterH -> c' $ ex $ InterpreterH go_
                   GetProcessorH ->
-                      c' $ ex' $ ProcessorH $ \t fz ->
+                      c' $ ex $ ProcessorH $ \t fz ->
                         (fmap ViaTraversal #. wv .# getViaTraversal) (fmap fz t)
-                  RestoreH (ViaTraversal t) ->
-                    k' (injUsing Here (RestoreW t)) (c' . ex')
+                  RestoreH (ViaTraversal t) -> wH (mkW $ RestoreW t) (c' . ex)
                   LiftWithH main ->
-                    (`k'` c') $ injUsing Here $ LiftWithW $ \lwr' ->
-                      ex' $ main $ (fmap ViaTraversal #. lwr' . goWeaved_)
-                  EmbedH m' -> k' (injUsing Here $ EmbedW m') (c' . ex')
+                    (`wH` c') $ mkW $ LiftWithW $ \lwr' ->
+                      ex $ main $ (fmap ViaTraversal #. lwr' . goWeaved_)
+                  EmbedH m' -> wH (mkW $ EmbedW m') (c' . ex)
                   GetStateH ->
-                    k' (injUsing Here (GetStateW (\w -> ViaTraversal (w ()))))
-                       (c' . ex')
+                    wH (mkW $ GetStateW (\w -> ViaTraversal (w ()))) (c' . ex)
                   PropagateH pr e' n ->
-                    (`k'` id) $ injUsing Here $ GetStateW $ \mkS' ->
-                    (`k'` id) $ injUsing Here $ LiftWithW $ \lwr' ->
-                    k' (injUsing Here (
-                           EmbedW $ liftSem $ Union pr
-                           $ Weaved e' trav mkS'
-                              (fmap getViaTraversal #. n id .# ViaTraversal)
-                              lwr')) $ \ta ->
-                    k' (injUsing Here $ RestoreW ta) (c' . ex')
+                    (`wH` id) $ mkW $ GetStateW $ \mkS' ->
+                    (`wH` id) $ mkW $ LiftWithW $ \lwr' ->
+                    wH (mkW $ EmbedW $ liftWeaving pr
+                        $ Weaved e' trav mkS'
+                         (fmap getViaTraversal #. n id .# ViaTraversal) lwr')
+                       \ta -> wH (mkW $ RestoreW ta) (c' . ex)
             {-# INLINE goWeaved #-}
 
             goWeaved_ :: forall rC x
@@ -524,7 +522,7 @@ interpretH h = go
             goWeaved_ = goWeaved
             {-# NOINLINE goWeaved_ #-}
           in
-            runSem (lwr (goWeaved (h e))) k (c .# coerce)
+            runSem (lwr (goWeaved (h e))) hs (c .# coerce)
     {-# INLINE go #-}
 
     go_ :: forall a'. Sem (e ': r) a' -> Sem r a'
@@ -543,13 +541,11 @@ interpretH h = go
 --
 -- @since TODO
 genericInterpretH :: forall e r' r a
-                  . (forall e'. ElemOf e' r -> ElemOf e' r')
+                  . RowTransformer r r'
                  -> EffHandlerH e r'
                  -> Sem (e ': r) a
                  -> Sem r' a
-genericInterpretH tPr h = interpretH h . mapMembership \case
-  Here -> Here
-  There pr -> There (tPr pr)
+genericInterpretH tPr h = interpretH h . transformSem (underRow1 tPr)
 {-# INLINE genericInterpretH #-}
 
 ------------------------------------------------------------------------------
@@ -573,7 +569,7 @@ reinterpretH :: forall e1 e2 r a
                 . EffHandlerH e1 (e2 ': r)
                -> Sem (e1 ': r) a
                -> Sem (e2 ': r) a
-reinterpretH = genericInterpretH There
+reinterpretH = genericInterpretH raiseRow
 {-# INLINE reinterpretH #-}
 
 ------------------------------------------------------------------------------
@@ -600,7 +596,7 @@ reinterpret2H :: forall e1 e2 e3 r a
                  . EffHandlerH e1 (e2 ': e3 ': r)
                 -> Sem (e1 ': r) a
                 -> Sem (e2 ': e3 ': r) a
-reinterpret2H = genericInterpretH (There . There)
+reinterpret2H = genericInterpretH (raiseRow `joinRow` raiseRow)
 {-# INLINE reinterpret2H #-} -- genericInterpretH uses mapMembership
 
 ------------------------------------------------------------------------------
@@ -624,7 +620,7 @@ reinterpret3H :: forall e1 e2 e3 e4 r a
                  . EffHandlerH e1 (e2 ': e3 ': e4 ': r)
                 -> Sem (e1 ': r) a
                 -> Sem (e2 ': e3 ': e4 ': r) a
-reinterpret3H = genericInterpretH (There . There . There)
+reinterpret3H = genericInterpretH (raiseRowMany (SCons (SCons (SCons SEnd))))
 {-# INLINE reinterpret3H #-} -- genericInterpretH uses mapMembership
 
 ------------------------------------------------------------------------------

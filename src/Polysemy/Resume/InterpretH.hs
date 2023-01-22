@@ -1,5 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
-module Polysemy.Resume.InterpretH (
+module Polysemy.Resume.InterpretH where
+{-
+(
   -- * Effect
   Resumable,
 
@@ -53,3 +55,4 @@ runResumableBase interp =
         -> InterpreterFor (Resumable err eff) (Run eff ': r)
     go_ = go
     {-# NOINLINE go_ #-}
+-}

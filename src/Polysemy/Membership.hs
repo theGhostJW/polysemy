@@ -16,14 +16,28 @@ module Polysemy.Membership
   , exposeUsing
   , interceptUsing
   , interceptUsingH
-  , mapMembership
 
   -- * Membership manipulation
-  , extendMembershipLeft
-  , extendMembershipRight
-  , injectMembership
+  , transformSem
+  , transformMembership
   , Subsume(..)
   , Raise(..)
+
+  -- * RowTransformer
+  , RowTransformer
+  , idRow
+  , joinRow
+  , extendRowMany
+  , extendRowAltMany
+  , extendRowAlt1
+  , raiseRow
+  , raiseRowMany
+  , underRow1
+  , underRowMany
+  , subsumeRow
+  , swapRow
+  , exposeRow
+  , splitRow
 
     -- * Miscellaneous
   , Append

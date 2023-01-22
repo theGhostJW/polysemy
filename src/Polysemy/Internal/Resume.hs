@@ -1,5 +1,5 @@
 module Polysemy.Internal.Resume where
-
+{-
 import Polysemy
 import Polysemy.Internal.Scoped
 
@@ -22,3 +22,4 @@ resume m h = (>>= either h return) $ send @(Resumable err eff) $ Resume $ \w ->
 --                  -> Sem (Opaque q ': r) (Either err x)
 --                 )
 --              -> InterpreterFor (Resumable err eff) r
+-}

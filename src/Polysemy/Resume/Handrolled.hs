@@ -1,5 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
-module Polysemy.Resume.Handrolled (
+module Polysemy.Resume.Handrolled where
+{-
+(
   -- * Effect
   Resumable,
 
@@ -68,3 +70,4 @@ runResumableBase interp =
         -> Sem (Resumable err eff ': r) x -> Sem (Run eff ': r) x
     go_ = go
     {-# NOINLINE go_ #-}
+-}

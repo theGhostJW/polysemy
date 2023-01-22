@@ -21,25 +21,42 @@ data RowTransformer r r' where
   Join :: RowTransformer r' r'' -> RowTransformer r r' -> RowTransformer r r''
   Raise :: {-# UNPACK #-} !(SList l) -> RowTransformer r (Append l r)
   Extend :: {-# UNPACK #-} !(SList r) -> RowTransformer l (Append l r)
+  ExtendAlt :: Proxy# r -> {-# UNPACK #-} !(SList l) -> RowTransformer l (Append l r)
   Under :: {-# UNPACK #-} !(SList l) -> RowTransformer a b -> RowTransformer (Append l a) (Append l b)
   Subsume :: {-# UNPACK #-} !(ElemOf e r) -> RowTransformer (e ': r) r
   Swap :: Proxy# r -> {-# UNPACK #-} !(SList l) -> {-# UNPACK #-} !(SList mid) -> RowTransformer (Append l (Append mid r)) (Append mid (Append l r))
+  Split :: {-# UNPACK #-} !(SList l) -> RowTransformer l g -> RowTransformer r g -> RowTransformer (Append l r) g
   Expose :: {-# UNPACK #-} !(ElemOf e r) -> RowTransformer r (e ': r)
+  -- Subsume thirsts for this. Can be written using Split and ExtendAlt
+  -- Rewrite :: {-# UNPACK #-} !(SList l) -> RowTransformer l r -> RowTransformer (Append l r) r
 
+{-
+
+
+RowTransformer l (Append l r)
+
+RowTransformer (Append l r) (Append (Append l r) r')
+
+RowTransformer l (Append (Append l r) r')
+~
+RowTransformer l (Append l (Append r r'))
+-}
 instance Category RowTransformer where
   id = Id
-  (.) = join
+  (.) = joinRow
 
-join :: RowTransformer r' r'' -> RowTransformer r r' -> RowTransformer r r''
-join Id r = r
-join r Id = r
-join (Raise (UnsafeMkSList i)) (Raise (UnsafeMkSList j)) = unsafeCoerce (Raise (UnsafeMkSList (i + j)))
-join (Extend (UnsafeMkSList i)) (Extend (UnsafeMkSList j)) = unsafeCoerce (Extend (UnsafeMkSList (i + j)))
-join (Under (UnsafeMkSList i) l) (Under (UnsafeMkSList j) r) = case compare i j of
-  EQ -> unsafeCoerce $ underRowMany (UnsafeMkSList i) (join l (unsafeCoerce r))
-  LT -> unsafeCoerce $ underRowMany (UnsafeMkSList i) (join l (unsafeCoerce $ Under (UnsafeMkSList (j - i)) r))
-  GT -> unsafeCoerce $ underRowMany (UnsafeMkSList j) (join (unsafeCoerce $ Under (UnsafeMkSList (i - j)) l) r)
-join l r = Join l r
+joinRow :: RowTransformer r' r'' -> RowTransformer r r' -> RowTransformer r r''
+joinRow Id r = r
+joinRow r Id = r
+joinRow (Raise (UnsafeMkSList i)) (Raise (UnsafeMkSList j)) = unsafeCoerce (Raise (UnsafeMkSList (i + j)))
+joinRow (Extend (UnsafeMkSList i)) (Extend (UnsafeMkSList j)) = unsafeCoerce (Extend (UnsafeMkSList (i + j)))
+joinRow (ExtendAlt _ (UnsafeMkSList i)) (Extend _) = unsafeCoerce (ExtendAlt proxy# (UnsafeMkSList i))
+joinRow (ExtendAlt _ (UnsafeMkSList i)) (ExtendAlt _ _) = unsafeCoerce (ExtendAlt proxy# (UnsafeMkSList i))
+joinRow (Under (UnsafeMkSList i) l) (Under (UnsafeMkSList j) r) = case compare i j of
+  EQ -> unsafeCoerce $ underRowMany (UnsafeMkSList i) (joinRow l (unsafeCoerce r))
+  LT -> unsafeCoerce $ underRowMany (UnsafeMkSList i) (joinRow l (unsafeCoerce $ Under (UnsafeMkSList (j - i)) r))
+  GT -> unsafeCoerce $ underRowMany (UnsafeMkSList j) (joinRow (unsafeCoerce $ Under (UnsafeMkSList (i - j)) l) r)
+joinRow l r = Join l r
 
 idRow :: RowTransformer r r
 idRow = Id
@@ -47,7 +64,17 @@ idRow = Id
 raiseRow :: RowTransformer r (e ': r)
 raiseRow = Raise (SCons SEnd)
 
-raiseRowMany :: SList l -> RowTransformer r (Append l r)
+extendRowMany :: SList r -> RowTransformer l (Append l r)
+extendRowMany SEnd = unsafeCoerce Id
+extendRowMany l = Extend l
+
+extendRowAltMany :: forall r l . SList l -> RowTransformer l (Append l r)
+extendRowAltMany = ExtendAlt @r proxy#
+
+extendRowAlt1 :: forall r e. RowTransformer '[e] (e ': r)
+extendRowAlt1 = ExtendAlt @r proxy# (SCons SEnd)
+
+raiseRowMany :: forall r l. SList l -> RowTransformer r (Append l r)
 raiseRowMany SEnd = Id
 raiseRowMany i = Raise i
 
@@ -72,11 +99,16 @@ exposeRow = Expose
 raiseUnderRow :: RowTransformer (e ': r) (e ': e' ': r)
 raiseUnderRow = underRow1 raiseRow
 
+splitRow :: SList l -> RowTransformer l g -> RowTransformer r g -> RowTransformer (Append l r) g
+splitRow SEnd _ h = h
+splitRow l f g = Split l f g
+
 transformMembership :: RowTransformer r r' -> ElemOf e r -> ElemOf e r'
 transformMembership Id pr = pr
 transformMembership (Join l r) pr = transformMembership l (transformMembership r pr)
 transformMembership (Raise l) pr = extendMembershipLeft l pr
 transformMembership (Extend (_ :: SList r)) pr = extendMembershipRight @_ @r pr
+transformMembership (ExtendAlt (_ :: Proxy# r) _) pr = extendMembershipRight @_ @r pr
 transformMembership (Under l row) pr = underMembership l (transformMembership row) pr
 transformMembership (Subsume pr_) pr = case pr of
   Here -> pr_
@@ -85,6 +117,9 @@ transformMembership (Swap (_ :: Proxy# r) l mid) pr = swapStacks @r l mid pr
 transformMembership (Expose pr_) pr
   | Just Refl <- sameMember pr_ pr = Here
   | otherwise = There pr
+transformMembership (Split l f g) pr = case splitMembership l pr of
+  Left pr' -> transformMembership f pr'
+  Right pr' -> transformMembership g pr'
 
 
 {-

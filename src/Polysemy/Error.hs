@@ -199,47 +199,50 @@ runError
     :: Sem (Error e ': r) a
     -> Sem r (Either e a)
 runError sem0 = Sem $ \k c0 ->
-  runSem sem0
-    (\u c -> case decomp u of
-        Left g -> (`k` either (c0 . Left) c) $
-          weave
+  let
+    g' = mapHandlers
+      (\f wav c ->
+        f (weave
             (Right ())
-            (either (return . Left) go)
+            (either (return . Left) runError)
             runWeaveError
-            g
-        Right wav -> fromSimpleHOEff wav \_ lwr ex -> \case
-          Throw exc -> c0 (Left exc)
-          Catch m h ->
-            let
-              m' = runSem (go (lwr m)) k
-              h' = usingSem (either (c0 . Left) (c . ex)) k . go . lwr . h
-            in
-              m' (either h' (c . ex))
-    )
-    (c0 . Right)
-  where
-    go :: Sem (Error e ': r) a -> Sem r (Either e a)
-    go = runError
-    {-# NOINLINE go #-}
+            wav
+          )
+          (either (c0 . Left) c)
+      ) k
+
+    AHandler ah = AHandler $ \wav c -> fromSimpleHOEff wav \_ lwr ex -> \case
+      Throw exc -> c0 (Left exc)
+      Catch m h ->
+        let
+          m' = runSem (runError (lwr m)) k
+          h' = usingSem (either (c0 . Left) (c . ex)) k . runError . lwr . h
+        in
+          m' (either h' (c . ex))
+  in
+    runSem sem0 (mkHandlers $ consHandler' ah g') (c0 . Right)
 
 runWeaveError :: Sem (Weave (Either e) r ': r) a -> Sem r (Either e a)
 runWeaveError sem0 = Sem $ \k c0 ->
-  runSem sem0
-    (\u c -> case decomp u of
-        Left g -> (`k` either (c0 . Left) c) $
-          weave
+  let
+    g' = mapHandlers
+      (\f wav c ->
+        f (weave
             (Right ())
             (either (return . Left) runWeaveError)
             runWeaveError
-            g
-        Right wav -> fromFOEff wav $ \ex -> \case
-          RestoreW t -> either (c0 . Left) (c . ex) t
-          GetStateW main -> c $ ex $ main Right
-          LiftWithW main -> c $ ex $ main runWeaveError
-          EmbedW m -> runSem m k (\a -> c (ex a))
-    )
-    (c0 . Right)
+            wav
+          )
+          (either (c0 . Left) c)
+      ) k
 
+    AHandler h = AHandler $ \wav c -> fromFOEff wav $ \ex -> \case
+      RestoreW t -> either (c0 . Left) (c . ex) t
+      GetStateW main -> c $ ex $ main Right
+      LiftWithW main -> c $ ex $ main runWeaveError
+      EmbedW m -> runSem m k (\a -> c (ex a))
+  in
+    runSem sem0 (mkHandlers $ consHandler' h g') (c0 . Right)
 
 -- TODO: Remove mapError! It's bad!
 ------------------------------------------------------------------------------

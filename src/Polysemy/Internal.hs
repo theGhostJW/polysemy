@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes   #-}
+{-# LANGUAGE BangPatterns   #-}
 {-# LANGUAGE CPP                  #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MonoLocalBinds        #-}
@@ -38,14 +39,31 @@ module Polysemy.Internal
   , exposeUsing
   , Embed (..)
   , usingSem
-  , liftSem
-  , throughSem
+  , liftWeaving
   , hoistSem
-  , mapMembership
+  , transformSem
   , Append
   , InterpreterFor
   , InterpretersFor
   , interpretFast
+
+  , RowTransformer
+  , idRow
+  , joinRow
+  , extendRowMany
+  , extendRowAltMany
+  , extendRowAlt1
+  , raiseRow
+  , raiseRowMany
+  , underRow1
+  , underRowMany
+  , subsumeRow
+  , swapRow
+  , exposeRow
+  , splitRow
+  , transformMembership
+
+  , module Polysemy.Internal.Membership
   ) where
 
 import Data.Kind
@@ -54,9 +72,10 @@ import Polysemy.Embed.Type
 import Polysemy.Internal.Index (InsertAtIndex(insertAtIndex))
 import Polysemy.Internal.Kind
 import Polysemy.Internal.PluginLookup
-import Polysemy.Internal.Union
-import Polysemy.Internal.Sing
 import Polysemy.Internal.Core
+import Polysemy.Internal.Membership
+import Polysemy.Internal.RowTransformer
+import Polysemy.Internal.Sing
 
 
 ------------------------------------------------------------------------------
@@ -94,35 +113,6 @@ type family Members es r :: Constraint where
   Members (e ': es) r = (Member e r, Members es r)
 
 ------------------------------------------------------------------------------
--- | Rewrite the effect stack of a 'Sem' using with an explicit membership proof
--- transformation.
-mapMembership :: forall r r' a
-               . (forall e. ElemOf e r -> ElemOf e r')
-              -> Sem r a
-              -> Sem r' a
-mapMembership n = go
-  where
-    go :: forall x. Sem r x -> Sem r' x
-    go = hoistSem $ \(Union pr wav) -> hoist go_ $ Union (n pr) wav
-    {-# INLINE go #-}
-
-    go_ :: forall x. Sem r x -> Sem r' x
-    go_ = go
-    {-# NOINLINE go_ #-}
-{-# INLINEABLE[0] mapMembership #-}
-
-{-# RULES
-"mapMembership/id" [2]
-  forall m.
-    mapMembership idMembership m = m
-
-"mapMembership/mapMembership" [1]
-  forall (f :: forall e. ElemOf e r' -> ElemOf e r'')
-         (g :: forall e. ElemOf e r -> ElemOf e r') m.
-    mapMembership f (mapMembership g m) = mapMembership (f . g) m
-#-}
-
-------------------------------------------------------------------------------
 -- | Introduce an arbitrary number of effects on top of the effect stack. This
 -- function is highly polymorphic, so it may be good idea to use its more
 -- concrete versions (like 'raise') or type annotations to avoid vague errors
@@ -130,7 +120,7 @@ mapMembership n = go
 --
 -- @since 1.4.0.0
 raise_ :: ∀ r r' a. Raise r r' => Sem r a -> Sem r' a
-raise_ = mapMembership raiseMembership
+raise_ = transformSem raiseMembership
 {-# INLINE raise_ #-}
 
 
@@ -138,26 +128,27 @@ raise_ = mapMembership raiseMembership
 --
 -- @since 1.4.0.0
 class Raise (r :: EffectRow) (r' :: EffectRow) where
-  raiseMembership :: ElemOf e r -> ElemOf e r'
+  raiseMembership :: RowTransformer r r'
 
 instance {-# INCOHERENT #-} Raise r r where
-  raiseMembership = idMembership
+  raiseMembership = idRow
   {-# INLINE raiseMembership #-}
 
 instance {-# OVERLAPPING #-} Raise (e ': r) (e ': r) where
-  raiseMembership = idMembership
+  raiseMembership = idRow
   {-# INLINE raiseMembership #-}
 
 instance Raise r r' => Raise r (_0 ': r') where
-  raiseMembership = There . raiseMembership
+  raiseMembership = raiseRow `joinRow` raiseMembership
 
 ------------------------------------------------------------------------------
 -- | Introduce an effect into 'Sem'. Analogous to
 -- 'Control.Monad.Class.Trans.lift' in the mtl ecosystem. For a variant that
 -- can introduce an arbitrary number of effects, see 'raise_'.
 raise :: ∀ e r a. Sem r a -> Sem (e ': r) a
-raise = raise_
-{-# INLINE[3] raise #-}
+raise = hoistSem $ \(Handlers n hs) ->
+  Handlers (n . raise) (dropHandlers' @'[_] hs)
+-- {-# INLINE[3] raise #-}
 
 
 ------------------------------------------------------------------------------
@@ -243,26 +234,25 @@ raiseUnder3 = subsume_
 --
 -- @since 1.4.0.0
 subsume_ :: ∀ r r' a. Subsume r r' => Sem r a -> Sem r' a
-subsume_ = mapMembership subsumeMembership
+subsume_ = transformSem subsumeMembership
 {-# INLINE subsume_ #-}
 
 class Raise' (r :: EffectRow) (r' :: EffectRow) where
-  raiseMembership' :: ElemOf e r -> ElemOf e r'
+  raiseMembership' :: RowTransformer r r'
 
 instance {-# INCOHERENT #-} Raise' r r where
-  raiseMembership' = idMembership
+  raiseMembership' = idRow
   {-# INLINE raiseMembership' #-}
 
 instance {-# OVERLAPPING #-} Raise' (e ': r) (e ': r) where
-  raiseMembership' = idMembership
+  raiseMembership' = idRow
   {-# INLINE raiseMembership' #-}
 
 instance Subsume r r' => Raise' r (_0 ': r') where
-  raiseMembership' = There . subsumeMembership
+  raiseMembership' = raiseRow `joinRow` subsumeMembership
 
 class Subsume' (origR' :: EffectRow) (r :: EffectRow) (r' :: EffectRow) where
-  subsumeMembership' :: (ElemOf e r' -> ElemOf e origR')
-                     -> ElemOf e r -> ElemOf e origR'
+  subsumeMembership' :: RowTransformer r' origR' -> RowTransformer r origR'
 
 instance Subsume r origR' => Subsume' origR' r r' where
   subsumeMembership' _ = subsumeMembership
@@ -270,8 +260,12 @@ instance Subsume r origR' => Subsume' origR' r r' where
 
 instance {-# INCOHERENT #-} Subsume' origR r r'
   => Subsume' origR (e ': r) (e ': r') where
-  subsumeMembership' t Here = t Here
-  subsumeMembership' t (There pr) = subsumeMembership' (t . There) pr
+  subsumeMembership' t =
+    splitRow (SCons SEnd)
+      (t `joinRow` extendRowAlt1)
+      (subsumeMembership' @origR @r @r' (t `joinRow` raiseRow)) --  (subsumeMembership' _)
+
+  -- subsumeMembership' t (There pr) = subsumeMembership' (t . There) pr
 
 instance {-# INCOHERENT #-} Subsume' origR (e ': r) (e ': r) where
   subsumeMembership' t = t
@@ -281,7 +275,7 @@ instance {-# INCOHERENT #-} Subsume' origR (e ': r) (e ': r) where
 --
 -- @since 1.4.0.0
 class Subsume (r :: EffectRow) (r' :: EffectRow) where
-  subsumeMembership :: ElemOf e r -> ElemOf e r'
+  subsumeMembership :: RowTransformer r r'
 
 instance {-# INCOHERENT #-} Raise' r r' => Subsume r r' where
   subsumeMembership = raiseMembership'
@@ -289,16 +283,19 @@ instance {-# INCOHERENT #-} Raise' r r' => Subsume r r' where
 
 instance {-# INCOHERENT #-} Subsume' (e ': r') (e ': r) (e ': r')
       => Subsume (e ': r) (e ': r') where
-  subsumeMembership = subsumeMembership' idMembership
+  subsumeMembership = subsumeMembership' idRow
   {-# INLINE subsumeMembership #-}
 
 instance Subsume '[] r where
-  subsumeMembership = absurdMembership
+  subsumeMembership = extendRowAltMany SEnd
   {-# INLINE subsumeMembership #-}
 
 instance (Member e r', Subsume r r') => Subsume (e ': r) r' where
-  subsumeMembership Here = membership
-  subsumeMembership (There pr) = subsumeMembership pr
+  subsumeMembership =
+    splitRow (SCons SEnd)
+      (subsumeRow membership `joinRow` extendRowAlt1)
+      subsumeMembership
+  -- subsumeMembership `joinRow` subsumeRow membership
 
 ------------------------------------------------------------------------------
 -- | Interprets an effect in terms of another identical effect.
@@ -313,7 +310,7 @@ instance (Member e r', Subsume r r') => Subsume (e ': r) r' where
 --
 -- @since 1.2.0.0
 subsume :: ∀ e r a. Member e r => Sem (e ': r) a -> Sem r a
-subsume = subsume_
+subsume = subsumeUsing membership
 {-# INLINE subsume #-}
 
 
@@ -343,9 +340,11 @@ subsume = subsume_
 --
 -- @since 1.3.0.0
 subsumeUsing :: ∀ e r a. ElemOf e r -> Sem (e ': r) a -> Sem r a
-subsumeUsing pr = mapMembership \case
-  Here -> pr
-  There pr' -> pr'
+subsumeUsing pr = hoistSem $ \(Handlers n hs) ->
+  let
+    AHandler !h = AHandler $ getHandler' hs pr
+  in
+    Handlers (n . subsumeUsing pr) (consHandler' h hs)
 {-# INLINE subsumeUsing #-}
 
 ------------------------------------------------------------------------------
@@ -386,11 +385,11 @@ insertAt
      , InsertAtIndex index head tail oldTail full inserted)
   => Sem old a
   -> Sem full a
-insertAt = mapMembership $
-  injectMembership
-    @oldTail
-    (listOfLength @"insertAt" @index @head)
+insertAt = transformSem $
+  underRowMany (listOfLength @"insertAt" @index @head)
+  (raiseRowMany @oldTail
     (insertAtIndex @Effect @index @head @tail @oldTail @full @inserted)
+  )
 {-# INLINE insertAt #-}
 
 -- | Given an explicit proof that @e@ exists in @r@, moves all uses of e@
@@ -403,10 +402,15 @@ insertAt = mapMembership $
 --
 -- @since 2.0.0.0
 exposeUsing :: forall e r a. ElemOf e r -> Sem r a -> Sem (e ': r) a
-exposeUsing pr = mapMembership \pr' ->
-  case sameMember pr pr' of
-    Just Refl -> Here
-    _         -> There pr'
+exposeUsing pr = hoistSem $ \(Handlers n hs) ->
+  let
+    AHandler !h = AHandler $ getHandler' hs Here
+  in
+    Handlers
+      (n . exposeUsing pr)
+      (interceptHandler' pr h (dropHandlers' @'[_] hs))
+
+-- transformSem (exposeRow pr)
 {-# INLINE exposeUsing #-}
 
 
@@ -414,22 +418,8 @@ exposeUsing pr = mapMembership \pr' ->
 ------------------------------------------------------------------------------
 -- | Run a 'Sem' containing no effects as a pure value.
 run :: Sem '[] a -> a
-run (Sem m) = m absurdU id
+run (Sem m) = m emptyHandlers id
 {-# INLINE run #-}
-
-
-------------------------------------------------------------------------------
--- | Type synonym for interpreters that consume an effect without changing the
--- return value. Offered for user convenience.
---
--- @r@ Is kept polymorphic so it's possible to place constraints upon it:
---
--- @
--- teletypeToIO :: 'Member' (Embed IO) r
---              => 'InterpreterFor' Teletype r
--- @
-type InterpreterFor e r = ∀ a. Sem (e ': r) a -> Sem r a
-
 
 ------------------------------------------------------------------------------
 -- | Variant of 'InterpreterFor' that takes a list of effects.
@@ -437,30 +427,26 @@ type InterpreterFor e r = ∀ a. Sem (e ': r) a -> Sem r a
 type InterpretersFor es r = ∀ a. Sem (Append es r) a -> Sem r a
 
 
-sinkBelow :: forall l e r a
+sinkBelow :: forall l r e a
            . KnownList l => Sem (e ': Append l r) a -> Sem (Append l (e ': r)) a
-sinkBelow = mapMembership \case
-  Here -> extendMembershipLeft @(e ': r) (singList @l) Here
-  There pr -> injectMembership @r (singList @l) (singList @'[e]) pr
+sinkBelow = transformSem (swapRow @r (SCons SEnd) (singList @l))
 {-# INLINE sinkBelow #-}
 
 floatAbove :: forall l e r a
            . KnownList l => Sem (Append l (e ': r)) a -> Sem (e ': Append l r) a
-floatAbove = mapMembership \pr ->
-  case splitMembership @(e ': r) (singList @l) pr of
-    Left pr' -> There (extendMembershipRight @_ @r pr')
-    Right Here -> Here
-    Right (There pr') ->
-      There (extendMembershipLeft @r (singList @l) pr')
+floatAbove = transformSem (swapRow @r (singList @l) (SCons SEnd))
 {-# INLINE floatAbove #-}
 
 interpretFast :: forall e r. (∀ z x. e z x -> Sem r x) -> InterpreterFor e r
 interpretFast h = go
   where
     go :: InterpreterFor e r
-    go = throughSem $ \k u c -> case decomp u of
-      Left g -> k (hoist go_ g) c
-      Right wav -> fromFOEff wav $ \ex e -> runSem (h e) k (c . ex)
+    go = hoistSem $ \hs@(Handlers n v) ->
+      let
+        AHandler !ah = AHandler $ \wv c -> fromFOEff wv $ \ex e ->
+          runSem (h e) hs (c . ex)
+      in
+        Handlers (n . go_) (consHandler' ah v)
     {-# INLINE go #-}
 
     go_ :: InterpreterFor e r

@@ -173,10 +173,6 @@ runWriterSTMAction write = interpretH $ \case
         write o'
       writeTVar switch True
     {-# INLINE commitPass #-}
-
-runWeaveLazyWriter :: Monoid o
-                   => Sem (Weave (LazyT2 o) r ': r) a -> Lazy.WriterT o (Sem r) a
-runWeaveLazyWriter = weaveToTransWeave
 -- runWeaveLazyWriter sem0 = Sem $ \k c0 ->
 --   runSem sem0
 --     (\u c1 c2 -> case decomp u of

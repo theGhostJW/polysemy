@@ -124,9 +124,9 @@ runExposeMetaUsing :: forall r eff q metaeff z t rH rC l a mh
                    -> Sem (eff
                            ': HigherOrder z t (Meta metaeff) (mh ': rH) rC
                            ': r) (t a)
-runExposeMetaUsing pr = raise . processMetaUsing pr >=> mapMembership \case
-  Here -> Here
-  There pr' -> There $ There $ raiseMembership @(mh ': rH) @r pr'
+runExposeMetaUsing pr = raise . processMetaUsing pr
+  >=> transformSem (underRow1 (raiseRow
+                               `joinRow` raiseMembership @(mh ': rH) @r))
 
 runExposeMetaUsing' :: forall r metaeff eff q z t rH rC l a mh
                     . (Raise (mh ': rH) r, mh ~ HandlingMeta metaeff t rH l)
@@ -137,7 +137,7 @@ runExposeMetaUsing' :: forall r metaeff eff q z t rH rC l a mh
                             ': HigherOrder z t (Meta metaeff) (mh ': rH) rC
                             ': r) (t a)
 runExposeMetaUsing' pr =
-  raise . raise . processMetaUsing' pr >=> mapMembership \case
-    Here -> Here
-    There Here -> There Here
-    There (There pr') -> There $ There $ There $ raiseMembership @(mh ': rH) @r pr'
+  raise . raise . processMetaUsing' pr
+  >=> transformSem (underRow1
+                    $ underRow1
+                    $ raiseRow `joinRow` raiseMembership @(mh ': rH) @r)
