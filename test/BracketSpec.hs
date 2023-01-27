@@ -172,10 +172,8 @@ testAllThree name k m = do
     it "via runBracketLocally" $ do
       z <- runTest m
       k z
-    -- NOTE(sandy): These unsafeCoerces are safe, because we're just weakening
-    -- the end of the union
     it "via bracketToIOFinal" $ do
-      z <- runTest3 $ unsafeCoerce m
+      z <- runTest3 $ insertAt @4 m
       k z
 
 
@@ -186,10 +184,8 @@ testTheIOTwo
     -> Spec
 testTheIOTwo name k m = do
   describe name $ do
-    -- NOTE(sandy): This unsafeCoerces are safe, because we're just weakening
-    -- the end of the union
     it "via bracketToIOFinal" $ do
-      z <- runTest3 $ unsafeCoerce m
+      z <- runTest3 m
       k z
 
 
