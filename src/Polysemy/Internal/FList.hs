@@ -227,7 +227,7 @@ infixr 5 `concatFL`
 concatFL :: FList a -> FList a -> FList a
 concatFL (FList opsl n f) (FList opsr m g) =
   memoizeFListCond $ FList (max opsl opsr + 1) (n + m) \i ->
-    if i < n then f i else g i
+    if i < n then f i else g (i - n)
 {-# INLINE concatFL #-}
 
 indexFL :: FList a -> Int -> a
@@ -239,7 +239,8 @@ emptyFL = FList 0 0 (\_ -> errorWithoutStackTrace "end of FList")
 {-# INLINE emptyFL #-}
 
 updateFL :: Int -> a -> FList a -> FList a
-updateFL i a (FList ops n f) = memoizeFListCond $ FList (ops + 1) n \i' -> if i' == i then a else f i'
+updateFL i a (FList ops n f) = memoizeFListCond $ FList (ops + 1) n \i' ->
+  if i' == i then a else f i'
 {-# INLINE updateFL #-}
 
 imapFL :: (Int -> a -> b) -> FList a -> FList b
