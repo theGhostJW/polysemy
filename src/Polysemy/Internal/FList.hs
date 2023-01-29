@@ -184,6 +184,14 @@ instance Functor FList where
   {-# INLINE fmap #-}
 
 memoizeFList :: FList a -> FList a
+memoizeFList (FList _ n f) = FList 0 n f
+{-# INLINE memoizeFList #-}
+
+generateFL :: Int -> (Int -> a) -> FList a
+generateFL n f = FList n n f
+{-# INLINE generateFL #-}
+
+{-
 memoizeFList (FList _ n f) =
   if
     n > 256
@@ -196,6 +204,7 @@ memoizeFList (FList _ n f) =
           forM_ [0..n-1] $ \i -> writeSmallArray ma i $! f i
     in FList 0 n (indexSmallArray v)
 {-# INLINE memoizeFList #-}
+-}
 
 memoizeFListCond :: FList a -> FList a
 memoizeFListCond fl@(FList ops n _)

@@ -213,12 +213,12 @@ data Handlers r m res where
            -> Handlers r m res
 
 emptyHandlers :: Handlers '[] m res
-emptyHandlers = Handlers id (HandlerVector emptyHY)
+emptyHandlers = Handlers id (HandlerVector emptyFL)
 {-# INLINE emptyHandlers #-}
 
 
 emptyHandlers' :: HandlerVector '[] m res
-emptyHandlers' = HandlerVector emptyHY
+emptyHandlers' = HandlerVector emptyFL
 {-# INLINE emptyHandlers' #-}
 
 -- expensive
@@ -234,7 +234,7 @@ imapHandlers' :: (   forall e x
                 )
               -> HandlerVector r m res -> HandlerVector r m' res'
 imapHandlers' f (HandlerVector hs) = HandlerVector $
-  imapHY (\i (Handler' h) -> Handler' (f (UnsafeMkElemOf i) h)) hs
+  imapFL (\i (Handler' h) -> Handler' (f (UnsafeMkElemOf i) h)) hs
 
 hoistHandler :: (forall x. m x -> n x)
              -> (forall x. Weaving e n x -> (x -> res) -> res)
@@ -249,7 +249,7 @@ imapHandlers :: (   forall e x
                )
              -> Handlers r m res -> HandlerVector r m' res'
 imapHandlers f (Handlers n (HandlerVector hs)) = HandlerVector $
-  imapHY (\i (Handler' h) ->
+  imapFL (\i (Handler' h) ->
     Handler' (f (UnsafeMkElemOf i) (\wv -> h (hoistWeaving n wv))))
     hs
 {-# INLINE imapHandlers #-}
@@ -294,7 +294,7 @@ type Handler e m res = forall x. Weaving e m x -> (x -> res) -> res
 newtype Handler' m res = Handler' { unHandler' :: forall e. Handler e m res }
 
 type role HandlerVector representational representational representational
-newtype HandlerVector (r :: EffectRow) m res = HandlerVector (Hybrid (Handler' m res))
+newtype HandlerVector (r :: EffectRow) m res = HandlerVector (FList (Handler' m res))
 
 {-
 
@@ -325,7 +325,7 @@ getHandler (Handlers to v) pr =
 {-# INLINE getHandler #-}
 
 getHandler' :: HandlerVector r m res -> ElemOf e r -> Handler e m res
-getHandler' (HandlerVector v) (UnsafeMkElemOf i) = unHandler' (indexHY v i)
+getHandler' (HandlerVector v) (UnsafeMkElemOf i) = unHandler' (indexFL v i)
 {-# INLINE getHandler' #-}
 
 -- lupdate :: Int -> a -> [a] -> [a]
@@ -337,7 +337,7 @@ infixr 5 `concatHandlers'`
 concatHandlers' :: HandlerVector l m res
                 -> HandlerVector r m res
                 -> HandlerVector (Append l r) m res
-concatHandlers' (HandlerVector l) (HandlerVector r) = HandlerVector (l `concatHY` r)
+concatHandlers' (HandlerVector l) (HandlerVector r) = HandlerVector (l `concatFL` r)
 {-# INLINE concatHandlers' #-}
 
 generateHandlers'
@@ -345,7 +345,7 @@ generateHandlers'
   -> (forall x. ElemOf e r -> Weaving e m x -> (x -> res) -> res)
   -> HandlerVector r m res
 generateHandlers' (UnsafeMkSList s) f =
-  HandlerVector (generateHY s (unsafeCoerce f))
+  HandlerVector (generateFL s (unsafeCoerce f))
 {-# INLINE generateHandlers' #-}
 
 replaceHandler' :: forall r e_ e l m res
@@ -354,7 +354,7 @@ replaceHandler' :: forall r e_ e l m res
                -> HandlerVector (Append l (e_ ': r)) m res
                -> HandlerVector (Append l (e ': r)) m res
 replaceHandler' (UnsafeMkSList i) h (HandlerVector v) =
-  HandlerVector $ updateHY i (unsafeCoerce h) v
+  HandlerVector $ updateFL i (unsafeCoerce h) v
 {-# INLINE replaceHandler' #-}
 
 interceptHandler' :: forall r e m res
@@ -363,14 +363,14 @@ interceptHandler' :: forall r e m res
                   -> HandlerVector r m res
                   -> HandlerVector r m res
 interceptHandler' (UnsafeMkElemOf i) h (HandlerVector v) =
-  HandlerVector $ updateHY i (unsafeCoerce h) v
+  HandlerVector $ updateFL i (unsafeCoerce h) v
 {-# INLINE interceptHandler' #-}
 
 infixr 5 `consHandler'`
 consHandler' :: Handler e m res
              -> HandlerVector r m res
              -> HandlerVector (e ': r) m res
-consHandler' h (HandlerVector hs) = HandlerVector (unsafeCoerce h `consHY` hs)
+consHandler' h (HandlerVector hs) = HandlerVector (unsafeCoerce h `consFL` hs)
 {-# INLINE consHandler' #-}
 
 dropHandlers' :: forall l r m res
@@ -378,7 +378,7 @@ dropHandlers' :: forall l r m res
               => HandlerVector (Append l r) m res
               -> HandlerVector r m res
 dropHandlers' (HandlerVector hs) | UnsafeMkSList l <- singList @l =
-  HandlerVector (dropHY l hs)
+  HandlerVector (dropFL l hs)
 {-# INLINE dropHandlers' #-}
 
 takeHandlers' :: forall l r m res
@@ -386,7 +386,7 @@ takeHandlers' :: forall l r m res
               => HandlerVector (Append l r) m res
               -> HandlerVector l m res
 takeHandlers' (HandlerVector hs) | UnsafeMkSList l <- singList @l =
-  HandlerVector (takeHY l hs)
+  HandlerVector (takeFL l hs)
 {-# INLINE takeHandlers' #-}
 
 splitHandlers' :: forall l r m res
@@ -394,7 +394,7 @@ splitHandlers' :: forall l r m res
                => HandlerVector (Append l r) m res
                -> (HandlerVector l m res, HandlerVector r m res)
 splitHandlers' (HandlerVector hs)
-  | UnsafeMkSList n <- singList @l, (l, r) <- splitHY n hs =
+  | UnsafeMkSList n <- singList @l, (l, r) <- splitFL n hs =
       (HandlerVector l, HandlerVector r)
 
 
@@ -411,25 +411,25 @@ transformHandlerVector
 transformHandlerVector t0 = \(HandlerVector v) -> HandlerVector (go t0 v)
   where
     go :: RowTransformer r r'
-       -> Hybrid (Handler' m res) -> Hybrid (Handler' m res)
+       -> FList (Handler' m res) -> FList (Handler' m res)
     go Id v = v
     go (Join l r) v = go r $! go l v
-    go (Raise (UnsafeMkSList n)) v = dropHY n v
-    go (Extend (UnsafeMkSList n)) v = dropEndHY n v
-    go (ExtendAlt _ (UnsafeMkSList n)) v = takeHY n v
+    go (Raise (UnsafeMkSList n)) v = dropFL n v
+    go (Extend (UnsafeMkSList n)) v = dropEndFL n v
+    go (ExtendAlt _ (UnsafeMkSList n)) v = takeFL n v
     go (Under (UnsafeMkSList n) t) v
-      | (l, r) <- splitHY n v = l `concatHY` go t r
+      | (l, r) <- splitFL n v = l `concatFL` go t r
     go (Subsume (UnsafeMkElemOf pr)) v =
       let
-        !h = v `indexHY` pr
+        !h = v `indexFL` pr
       in
-        h `consHY` v
+        h `consFL` v
     go (Expose (UnsafeMkElemOf pr)) v
-      | (!h, v') <- unconsHY v = updateHY pr h v'
+      | (!h, v') <- unconsFL v = updateFL pr h v'
     go (Swap _ (UnsafeMkSList l) (UnsafeMkSList m)) v
-      | (mv, lrv) <- splitHY m v, (lv, rv) <- splitHY l lrv =
-          lv `concatHY` mv `concatHY` rv
-    go (Split _ f g) v = go f v `concatHY` go g v
+      | (mv, lrv) <- splitFL m v, (lv, rv) <- splitFL l lrv =
+          lv `concatFL` mv `concatFL` rv
+    go (Split _ f g) v = go f v `concatFL` go g v
 
   {-
   case go t0 (TransedUnbuffered v) of
