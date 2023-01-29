@@ -139,7 +139,6 @@ library
     , transformers >=0.5.2.0 && <0.6
     , type-errors >=0.2.0.0
     , unagi-chan >=0.4.0.0 && <0.5
-    , vector ==0.13.*
   default-language: Haskell2010
   if impl(ghc >= 9.2.4)
     default-extensions:
@@ -210,7 +209,6 @@ test-suite polysemy-test
     , transformers >=0.5.2.0 && <0.6
     , type-errors >=0.2.0.0
     , unagi-chan >=0.4.0.0 && <0.5
-    , vector ==0.13.*
   default-language: Haskell2010
   if impl(ghc >= 9.2.4)
     default-extensions:

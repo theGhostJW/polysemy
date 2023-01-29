@@ -12,9 +12,6 @@ import GHC.Exts (Any, Proxy#, proxy#)
 import Control.Category
 import Unsafe.Coerce
 
-import Data.Vector (Vector)
-import qualified Data.Vector as V
-
 
 data RowTransformer r r' where
   Id :: RowTransformer r r

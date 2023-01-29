@@ -48,10 +48,6 @@ import Polysemy.Internal.Sing
 import Control.Monad.ST
 import Unsafe.Coerce
 import GHC.Exts (considerAccessible)
-import Data.Vector (Vector)
-import qualified Data.Vector as V
-import Data.Sequence (Seq((:<|)))
-import qualified Data.Sequence as S
 import Polysemy.Internal.FList
 -- import Data.Vector (Vector)
 -- import qualified Data.Vector as V
