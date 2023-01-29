@@ -207,12 +207,19 @@ runError sem0 = Sem $ \k c0 ->
             (either (return . Left) go)
             runWeaveError
             g
-        Right wav -> fromSimpleHOEff wav \_ lwr ex -> \case
+        Right (Sent e n) -> case e of
           Throw exc -> c0 (Left exc)
           Catch m h ->
             let
-              m' = runSem (go (lwr m)) k
-              h' = usingSem (either (c0 . Left) (c . ex)) k . go . lwr . h
+              m' = runSem (go (n m)) k
+              h' = usingSem (either (c0 . Left) c) k . go . n . h
+            in m' (either h' c)
+        Right (Weaved e _ mkS wv _ ex) -> case e of
+          Throw exc -> c0 (Left exc)
+          Catch m h ->
+            let
+              m' = runSem (go (wv (mkS m))) k
+              h' = usingSem (either (c0 . Left) (c . ex)) k . go . wv . mkS . h
             in
               m' (either h' (c . ex))
     )

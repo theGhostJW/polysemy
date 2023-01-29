@@ -89,10 +89,10 @@ runOpaqueBundleAt = hoistSem $ \(Union pr wav) ->
         Sent (Opaque (Bundle pr' act')) n ->
           Union (extendMembershipLeft (singList @l)
                    (extendMembershipRight @_ @r pr')) (Sent act' n)
-        Weaved (Opaque (Bundle pr' act')) trav mkS wv lwr ->
+        Weaved (Opaque (Bundle pr' act')) trav mkS wv lwr ex ->
           Union (extendMembershipLeft (singList @l)
                    (extendMembershipRight @_ @r pr'))
-                (Weaved act' trav mkS wv lwr)
+                (Weaved act' trav mkS wv lwr ex)
       Right (There pr') ->
         Union (extendMembershipLeft (singList @l)
                 (extendMembershipLeft (singList @mid) pr')) wav

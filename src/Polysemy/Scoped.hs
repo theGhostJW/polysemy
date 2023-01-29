@@ -9,7 +9,6 @@ module Polysemy.Scoped (
 
   -- * Interpretations
   runScoped,
-  runScoped',
   runScoped_,
   rescope,
   ) where
@@ -19,7 +18,6 @@ import Polysemy.Membership
 import Polysemy.Meta
 import Polysemy.Opaque
 import Polysemy.Newtype
-import Polysemy.HigherOrder
 import Polysemy.Internal.Utils
 
 -- TODO: consider exposing this. Either from here or an internal module
@@ -54,23 +52,8 @@ runScoped :: forall eff param r
 runScoped interp =
   coerceEff
   >>> interpretMeta @(ScopedMeta eff param) \case
-    ScopedMeta param m -> do
-      InterpreterH go <- getInterpreterH
-      runMeta' (go . runOpaqueBundleAt @0 . interp param . collectOpaqueBundleAt @1 @'[_, _]) m
-
-      -- runMeta' (runScoped (\p -> runOpaqueBundleAt @0 . interp p . collectOpaqueBundleAt @1 @'[_, _] ) . coerceEff . runOpaqueBundleAt @0 . interp param . collectOpaqueBundleAt @1 @'[_, _]) m
-
-runScoped' :: forall eff r
-           . (   forall q x
-               . Int
-              -> Sem (eff ': Opaque q ': r) x -> Sem (Opaque q ': r) x
-             )
-          -> InterpreterFor (Scoped eff Int) r
-runScoped' interp =
-  coerceEff
-  >>> interpretMeta @(ScopedMeta eff Int) \case
     ScopedMeta param m ->
-      runMeta' (runScoped (\p -> runOpaqueBundleAt @0 . interp (p - 1) . collectOpaqueBundleAt @1 @'[_, _] ) . coerceEff . runOpaqueBundleAt @0 . interp param . collectOpaqueBundleAt @1 @'[_, _]) m
+      runMeta (fromOpaque . interp param . toOpaqueAt @'[_]) m
 
 runScoped_
   :: (forall q x. Sem (eff ': Opaque q ': r) x -> Sem (Opaque q ': r) x)

@@ -31,9 +31,6 @@ import Polysemy
 import Polysemy.State
 import Control.Monad (when)
 
-import Polysemy.Internal.Union
-import Polysemy.Internal.Writer
-
 
 ------------------------------------------------------------------------------
 -- | An effect capable of sending messages. Useful for streaming output and for

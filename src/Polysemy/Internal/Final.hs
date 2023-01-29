@@ -57,7 +57,6 @@ module Polysemy.Internal.Final
 
 import Data.Functor.Identity
 import Data.Kind
-import Data.Coerce
 import Polysemy.Internal
 import Polysemy.Internal.Union
 import Polysemy.Internal.Combinators
@@ -363,8 +362,8 @@ runLowering lowering = \case
         There (There Here) -> case wav of
           Sent (WithWeavingToFinal main) to' ->
             main (Untransformed (go . to')) >>= c .# runIdentity
-          Weaved (WithWeavingToFinal main) trav mkS wv lwr ->
-            main (Transformed trav mkS (go . wv) lwr) >>= c .# coerce
+          Weaved (WithWeavingToFinal main) trav mkS wv lwr ex ->
+            main (Transformed trav mkS (go . wv) lwr) >>= c . ex
         There (There (There pr')) -> absurdMembership pr'
 
     in
@@ -433,8 +432,8 @@ runM = usingSem return $ \u c -> case decomp u of
   Left g -> case extract g of
     Sent (WithWeavingToFinal main) n ->
       main (Untransformed (runM . n)) >>= c .# runIdentity
-    Weaved (WithWeavingToFinal main) trav mkS wv lwr ->
-      main (Transformed trav mkS (runM . wv) lwr) >>= c .# coerce
+    Weaved (WithWeavingToFinal main) trav mkS wv lwr ex ->
+      main (Transformed trav mkS (runM . wv) lwr) >>= c . ex
 {-# NOINLINE[3] runM #-}
 {-# SPECIALIZE[~3] runM :: Sem '[Embed IO, Final IO] a -> IO a #-}
 {-# SPECIALIZE[~3] runM :: Sem '[Embed Identity, Final Identity] a -> Identity a #-}

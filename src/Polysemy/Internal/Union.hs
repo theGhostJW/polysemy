@@ -78,7 +78,7 @@ import Polysemy.Internal.Membership
 import Polysemy.Internal.Sing (SList (..))
 
 
-weaveToTransWeave :: (MonadTransWeave t, Representational1 (StT t))
+weaveToTransWeave :: MonadTransWeave t
                   => Sem (Weave (StT t) r ': r) a -> t (Sem r) a
 weaveToTransWeave = usingSem return $ \u c -> case decomp u of
   Left g -> liftHandlerWithNat weaveToTransWeave liftSem g >>= c
@@ -92,14 +92,14 @@ weaveToTransWeave = usingSem return $ \u c -> case decomp u of
 
 -- Not used (nearly as much) anymore
 liftHandler :: ( MonadTransWeave t, Monad m, Monad n
-               , Representational1 m, Representational1 (StT t))
+               , forall x y. Coercible x y => Coercible (m x) (m y))
             => (forall x. Union r m x -> n x)
             -> Union r (t m) a -> t n a
 liftHandler = liftHandlerWithNat id
 {-# INLINE liftHandler #-}
 
 liftHandlerWithNat :: (MonadTransWeave t, Monad m, Monad n
-                      , Representational1 m, Representational1 (StT t))
+                      , forall x y. Coercible x y => Coercible (m x) (m y))
                    => (forall x. q x -> t m x)
                    -> (forall x. Union r m x -> n x)
                    -> Union r q a -> t n a

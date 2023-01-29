@@ -22,7 +22,6 @@ import Polysemy
 import Polysemy.Internal
 import Polysemy.Internal.Core
 import Polysemy.Internal.Union
-import Polysemy.Internal.Utils
 import Polysemy.Internal.Bundle (simpleSubsumeMembership)
 import Polysemy.Internal.Sing
 
@@ -96,8 +95,8 @@ runBundle
 runBundle = hoistSem $ \u -> hoist runBundle $ case decomp u of
   Right (Sent (Bundle pr e) n) ->
     Union (extendMembershipRight @r' @r pr) $ Sent e n
-  Right (Weaved (Bundle pr e) trav mkS wv lwr) ->
-    Union (extendMembershipRight @r' @r pr) $ Weaved e trav mkS wv lwr
+  Right (Weaved (Bundle pr e) trav mkS wv lwr ex) ->
+    Union (extendMembershipRight @r' @r pr) $ Weaved e trav mkS wv lwr ex
   Left g -> weakenList @r' @r (singList @r') g
 
 ------------------------------------------------------------------------------
@@ -110,6 +109,6 @@ subsumeBundle
 subsumeBundle = hoistSem $ \u -> hoist subsumeBundle $ case decomp u of
   Right (Sent (Bundle pr e) n) ->
     Union (simpleSubsumeMembership pr) $ Sent e n
-  Right (Weaved (Bundle pr e) trav mkS wv lwr) ->
-    Union (simpleSubsumeMembership pr) $ Weaved e trav mkS wv lwr
+  Right (Weaved (Bundle pr e) trav mkS wv lwr ex) ->
+    Union (simpleSubsumeMembership pr) $ Weaved e trav mkS wv lwr ex
   Left g -> g

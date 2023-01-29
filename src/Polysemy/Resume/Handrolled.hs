@@ -46,19 +46,19 @@ runResumableBase interp =
           & interp
           & fromOpaque
           & usingSem c k
-        Weaved (Resume m) (Traversal trav) mkS wv _ ->
+        Weaved (Resume m) (Traversal trav) mkS wv _ ex ->
           go_ depth' (wv (mkS (m depth)))
           & exposeRunHandrolled depth
           & toOpaqueAt @'[_]
           & interp
           & fromOpaque
-          & usingSem (c . coerce
-                      #. either (mkS . Left)
+          & usingSem (c . ex
+                      . either (mkS . Left)
                                (runIdentity #. trav (Identity #. Right)))
                       k
         Sent (ResumableRun r) n -> k (Union Here (Sent r (go_ depth . n))) c
-        Weaved (ResumableRun r) trav mkS wv lwr ->
-          k (Union Here (Weaved r trav mkS (go_ depth . wv) lwr)) c
+        Weaved (ResumableRun r) trav mkS wv lwr ex ->
+          k (Union Here (Weaved r trav mkS (go_ depth . wv) lwr ex)) c
       where
         !depth' = depth + 1
     {-# INLINE go #-}

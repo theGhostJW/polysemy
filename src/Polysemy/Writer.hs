@@ -33,13 +33,7 @@ import Polysemy.Output
 import Polysemy.State
 import Polysemy.HigherOrder
 
-import Polysemy.Internal.Union
 import Polysemy.Internal.Writer
-import Polysemy.Internal.Core
-import Polysemy.Internal.Utils
-import Data.Functor.Identity
-import Data.Functor.Const
-
 
 
 ------------------------------------------------------------------------------

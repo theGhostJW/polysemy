@@ -48,16 +48,16 @@ runScoped interp =
           & interp p
           & fromOpaque
           & usingSem c k
-        Weaved (Scoped p m) _ mkS wv _ ->
+        Weaved (Scoped p m) _ mkS wv _ ex ->
           go_ depth' (wv (mkS (m depth)))
           & exposeRunHandrolled depth
           & toOpaqueAt @'[_]
           & interp p
           & fromOpaque
-          & usingSem (c .# coerce) k
+          & usingSem (c . ex) k
         Sent (ScopedRun r) n -> k (Union Here (Sent r (go_ depth . n))) c
-        Weaved (ScopedRun r) trav mkS wv lwr ->
-          k (Union Here (Weaved r trav mkS (go_ depth . wv) lwr)) c
+        Weaved (ScopedRun r) trav mkS wv lwr ex ->
+          k (Union Here (Weaved r trav mkS (go_ depth . wv) lwr ex)) c
       where
         !depth' = depth + 1
     {-# INLINE go #-}

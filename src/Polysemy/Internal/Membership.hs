@@ -22,16 +22,6 @@ module Polysemy.Internal.Membership where
 
 import Polysemy.Internal.Sing
 import Data.Typeable
-import Data.Coerce
-import Control.Applicative
-import Control.Monad
-import Control.Monad.IO.Class
-import Control.Monad.Fix
-import Data.Functor.Identity
-import Data.Functor.Compose
-import Data.Traversable
-import Data.Type.Equality
-import Data.Kind
 import Polysemy.Internal.Kind
 import Polysemy.Internal.Opaque
 import Unsafe.Coerce

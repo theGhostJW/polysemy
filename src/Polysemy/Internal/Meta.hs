@@ -17,14 +17,13 @@ import Polysemy.Bundle
 import Polysemy.Membership
 import Polysemy.Internal
 import Polysemy.Internal.Union
+import Polysemy.Internal.Combinators
 import Polysemy.Internal.Utils
 import Polysemy.Internal.HigherOrder
 import Polysemy.Internal.Reflection
 import Polysemy.Internal.Core
-import Polysemy.Internal.Combinators
 import System.IO.Unsafe
 import Unsafe.Coerce
-import GHC.Exts (inline)
 
 type MetaEffect = [(Type -> Type, Effect)] -> Effect
 
@@ -405,7 +404,7 @@ interpretMeta h = \m -> do
         Left g -> k (hoist go_ g) c
         Right (Sent (MetaMetaRun uniq' (MetaRun effUniq _)) _) ->
           bomb uniq' effUniq
-        Right (Weaved (MetaMetaRun uniq' (MetaRun effUniq _)) _ _ _ _) ->
+        Right (Weaved (MetaMetaRun uniq' (MetaRun effUniq _)) _ _ _ _ _) ->
           bomb uniq' effUniq
         Right (Sent (SendMeta (metaeff :: metaeff l z _x) to1 to2) n) ->
           let
@@ -468,7 +467,7 @@ interpretMeta h = \m -> do
             runSem (handlingMetaIntoMetaRun handleHandlingMetaSpecific
                       (goSent (h metaeff))) k c
         Right (Weaved (SendMeta (metaeff :: metaeff l z _x) to1 to2)
-                (trav :: Traversal t) _ wv lwr) ->
+                (trav :: Traversal t) _ wv lwr ex) ->
           reify trav $ \(_ :: pr s) ->
             let
               handleHandlingMetaSpecific
@@ -527,7 +526,7 @@ interpretMeta h = \m -> do
                            $ Weaved e' trav mkS'
                               (fmap getViaTraversal #. n id .# ViaTraversal)
                               lwr'
-                              )) $ \ta ->
+                              id)) $ \ta ->
                     k' (injUsing Here $ RestoreW ta) (c' . ex')
                 Left g -> k' (hoist goWeaved_ g) c'
               {-# INLINE goWeaved #-}
@@ -541,7 +540,7 @@ interpretMeta h = \m -> do
               {-# NOINLINE goWeaved_ #-}
             in
               runSem (handlingMetaIntoMetaRun handleHandlingMetaSpecific
-                        (lwr (goWeaved (h metaeff)))) k (c .# coerce)
+                        (lwr (goWeaved (h metaeff)))) k (c . ex)
       {-# INLINE go #-}
 
       go_ :: InterpreterFor (Meta metaeff) (MetaRun ': r)
@@ -572,9 +571,9 @@ interpretMeta h = \m -> do
             Union (There Here) wav -> case wav of
               Sent (HandlingMetaMetaRun metarun) n ->
                 k (Union (There Here) (Sent metarun (goHMTM_ . n))) c
-              Weaved (HandlingMetaMetaRun metarun) trav mkS wv lwr ->
+              Weaved (HandlingMetaMetaRun metarun) trav mkS wv lwr ex ->
                 k (Union (There Here) (Weaved metarun
-                                trav mkS (goHMTM_ . wv) lwr)) c
+                                       trav mkS (goHMTM_ . wv) lwr ex)) c
               _ -> fromFOEff wav $ \ex e -> c (ex (specific e))
             Union (There (There pr)) wav ->
               k (hoist goHMTM_ (Union (There (There pr)) wav)) c
@@ -603,9 +602,9 @@ interpretMeta h = \m -> do
             Right wav -> case wav of
               Sent (HandlingMetaMetaRun metarun) n ->
                 k (Union Here (Sent metarun (goHMIMR_ . n))) c
-              Weaved (HandlingMetaMetaRun metarun) trav mkS wv lwr ->
+              Weaved (HandlingMetaMetaRun metarun) trav mkS wv lwr ex ->
                 k (Union Here (Weaved metarun
-                                trav mkS (goHMIMR_ . wv) lwr)) c
+                                trav mkS (goHMIMR_ . wv) lwr ex)) c
               _ -> fromFOEff wav $ \ex e -> c (ex (specific e))
         {-# INLINE goHMIMR #-}
 

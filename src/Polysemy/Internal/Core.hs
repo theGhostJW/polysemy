@@ -31,28 +31,15 @@ import Control.Monad.Fix
 import Data.Functor.Identity
 import Data.Functor.Compose
 import Data.Traversable
-import Data.Type.Equality
 import Polysemy.Internal.Reflection
 import Data.Kind
 import Polysemy.Embed.Type
 import Polysemy.Fail.Type
 import Polysemy.Internal.Fixpoint
 import Polysemy.Internal.Kind
-import Polysemy.Internal.Opaque
 import Polysemy.Internal.NonDet
 import Polysemy.Internal.Utils
 import Polysemy.Internal.Membership
-import Polysemy.Internal.RowTransformer
-import Polysemy.Internal.Sing
-import Control.Monad.ST
-import Unsafe.Coerce
-import GHC.Exts (considerAccessible)
-import Data.Vector (Vector)
-import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as MV
-import qualified Data.Vector.Fusion.Bundle as B
-import qualified Data.Vector.Generic as G
-import qualified Data.Vector.Generic.Mutable as GM
 
 -- $setup
 -- >>> import Data.Function
@@ -208,113 +195,6 @@ newtype Sem (r :: EffectRow) a = Sem
         -> (a -> res) -> res
   }
 
-data Handlers r m res where
-  Handlers :: (forall x. m x -> z x) -> HandlerVector r z res -> Handlers r m res
-
-newtype Handler m res = Handler { unHandler :: forall e x. Weaving e m x -> (x -> res) -> res }
-
-type role HandlerVector representational representational representational
-newtype HandlerVector (r :: EffectRow) m res = HandlerVector (Vector (Handler m res))
-
-getHandler :: Handlers r m res -> ElemOf e r
-           -> (forall x. Weaving e m x -> (x -> res) -> res)
-getHandler (Handlers to v) pr = \wav -> getHandler' v pr (hoistWeaving to wav)
-
-getHandler' :: HandlerVector r m res -> ElemOf e r
-            -> (forall x. Weaving e m x -> (x -> res) -> res)
-getHandler' (HandlerVector v) (UnsafeMkElemOf i) = unHandler (v V.! i)
-
-data TransformingVector m res
-  = TransedUnbuffered {-# UNPACK #-} !(Vector (Handler m res))
-  | TransedBuffered
-      {-# UNPACK #-} !Int
-      !(B.Bundle Vector (Handler m res))
-      {-# UNPACK #-} !(Vector (Handler m res))
-
-transformHandlerVector
-  :: RowTransformer r r'
-  -> (forall m res. HandlerVector r' m res -> HandlerVector r m res)
-transformHandlerVector t0 = \(HandlerVector v) ->
-  case go t0 (TransedUnbuffered v) of
-    TransedUnbuffered v' -> HandlerVector v'
-    TransedBuffered _ b v' -> HandlerVector (collapse b v')
-  where
-    conc :: Int -> B.Bundle Vector (Handler m res)
-         -> TransformingVector m res -> TransformingVector m res
-    conc i b (TransedUnbuffered v) = TransedBuffered i b v
-    conc i b (TransedBuffered i' b' v) = TransedBuffered (i + i') (b B.++ b') v
-
-    collapse :: B.Bundle Vector a -> Vector a -> Vector a
-    collapse b v = G.unstream (b B.++ G.stream v)
-    {-# INLINE collapse #-}
-
-    go :: RowTransformer r r'
-       -> TransformingVector m res -> TransformingVector m res
-    go Id v = v
-    go (Join l r) v = go l (go r v)
-    go (Raise (UnsafeMkSList n)) (TransedUnbuffered v) =
-      TransedUnbuffered (V.unsafeDrop n v)
-    go (Raise (UnsafeMkSList n)) (TransedBuffered bn b v) = case compare n bn of
-      EQ -> TransedUnbuffered v
-      LT -> TransedUnbuffered (V.drop n (collapse b v))
-      GT -> TransedUnbuffered (V.unsafeDrop (n - bn) v)
-    go (Extend (UnsafeMkSList n)) (TransedUnbuffered v) =
-      TransedUnbuffered (V.take (V.length v - n) v)
-    go (Extend (UnsafeMkSList n)) (TransedBuffered bn b v)
-      | n < V.length v =
-        TransedBuffered bn b (V.take (V.length v - n) v)
-      | otherwise =
-        TransedUnbuffered (V.take (bn + V.length v - n) (G.unstream b))
-    go (Under (UnsafeMkSList n) t) (TransedUnbuffered v)
-      | (l, r) <- V.splitAt n v =
-        conc n (G.stream l) (go t (TransedUnbuffered r))
-    go (Under (UnsafeMkSList n) t) (TransedBuffered bn b v) =
-      case compare n bn of
-        EQ -> conc bn b (go t (TransedUnbuffered v))
-        LT | (l, r) <- V.splitAt n (collapse b v) ->
-             conc n (G.stream l) (go t (TransedUnbuffered r))
-        GT | (l, r) <- V.splitAt (n - bn) v ->
-             conc n (b B.++ G.stream l) (go t (TransedUnbuffered r))
-    go (Subsume (UnsafeMkElemOf pr)) (TransedUnbuffered v) =
-      TransedBuffered 1 (B.singleton $! v V.! pr) v
-    go (Subsume (UnsafeMkElemOf pr)) (TransedBuffered bn b v)
-      | pr >= bn =
-        let
-          !h = v V.! (pr - bn)
-        in
-          TransedBuffered (bn + 1) (B.cons h b) v
-      | otherwise =
-        let v' = collapse b v
-        in TransedBuffered 1 (B.singleton $! v' V.! pr) v'
-    go (Expose pr) (TransedUnbuffered v) = mkExpose pr (V.thaw v)
-    go (Expose pr) (TransedBuffered _ b v) =
-      mkExpose pr (GM.unstream (b B.++ G.stream v))
-    go (Swap _ (UnsafeMkSList l) (UnsafeMkSList m)) (TransedUnbuffered v)
-      = TransedBuffered (l + m)
-        (G.stream (V.slice m l v) B.++ G.stream (V.unsafeTake m v))
-        (V.drop (l + m) v)
-    go (Swap _ (UnsafeMkSList l) (UnsafeMkSList m)) (TransedBuffered bn b v)
-      | bn <= m = TransedBuffered (l + m)
-                                  (G.stream (V.unsafeSlice (m - bn) l v)
-                                   B.++ b
-                                   B.++ G.stream (V.unsafeTake (m - bn) v))
-                                  (V.drop (l + m - bn) v)
-      | otherwise =
-        let
-          v' = collapse b v
-        in TransedBuffered (l + m)
-            (G.stream (V.slice m l v') B.++ G.stream (V.take m v'))
-            (V.drop (l + m) v')
-
-    mkExpose :: ElemOf e r
-             -> (forall s. ST s (MV.MVector s (Handler m res)))
-             -> TransformingVector m res
-    mkExpose (UnsafeMkElemOf pr) mkMv = TransedUnbuffered $ V.create $ do
-      mv <- mkMv
-      h <- MV.unsafeRead mv 0
-      MV.unsafeWrite mv (1 + pr) h
-      return $ MV.tail mv
-
 ------------------------------------------------------------------------------
 -- | Like 'runSem' but arguments rearranged for better ergonomics sometimes.
 usingSem
@@ -460,9 +340,7 @@ data Weaving e m a where
   Sent :: e z a -> !(forall x. z x -> m x) -> Weaving e m a
   Weaved
     :: forall t e z a resultType m.
-       (Coercible (t a) resultType,
-        forall x y. Coercible x y => Coercible (t x) (t y))
-    => { weaveEffect :: e z a
+       { weaveEffect :: e z a
        -- ^ The original effect GADT originally lifted via
        -- a variant of 'Polysemy.Internal.send'.
        -- ^ @z@ is usually @Sem rInitial@, where @rInitial@ is the effect row
@@ -473,11 +351,15 @@ data Weaving e m a where
        -- ^ A piece of state that other effects' interpreters have already
        -- woven through this 'Weaving'.
        , weaveDistrib :: forall x. t (z x) -> m (t x)
-       -- ^ Distribute @t@ by transforming @into @m@. This is
+       -- ^ Distribute @t@ by transforming @z@ into @m@. This is
        -- usually of the form @t ('Polysemy.Sem' (Some ': Effects ': r) x) ->
        --   Sem r (t x)@
        , weaveLowering :: forall r x. Sem (Weave t r ': r) x -> Sem r (t x)
        -- TODO document this
+       , weaveResult :: (t a -> resultType)
+       -- ^ Even though @t a@ is the moral resulting type of 'Weaving', we
+       -- can't expose that fact; such a thing would prevent 'Polysemy.Sem'
+       -- from being a 'Monad'.
        } -> Weaving e m resultType
 
 fromFOEff :: Weaving e m a
@@ -485,7 +367,7 @@ fromFOEff :: Weaving e m a
           -> res
 fromFOEff w c = case w of
   Sent e _ -> c id e
-  Weaved e _ mkS _ _ -> c (coerce #. mkS) e
+  Weaved e _ mkS _ _ ex -> c (ex . mkS) e
 {-# INLINEABLE fromFOEff #-}
 -- {-# INLINE fromFOEff #-}
 
@@ -500,7 +382,7 @@ fromSimpleHOEff :: Weaving e (Sem r) a
                 -> res
 fromSimpleHOEff w c = case w of
   Sent e n -> c Identity (fmap Identity #. n) runIdentity e
-  Weaved e _ mkS wv _ -> c mkS (wv . mkS) coerce e
+  Weaved e _ mkS wv _ ex -> c mkS (wv . mkS) ex e
 {-# INLINEABLE fromSimpleHOEff #-}
 -- {-# INLINE fromSimpleHOEff #-}
 
@@ -516,7 +398,7 @@ hoistWeaving :: (∀ x. m x -> n x)
              -> Weaving e n a
 hoistWeaving n' = \case
   Sent e n -> Sent e (n' . n)
-  Weaved e trav mkS wv lwr -> Weaved e trav mkS (n' . wv) lwr
+  Weaved e trav mkS wv lwr ex -> Weaved e trav mkS (n' . wv) lwr ex
 {-# INLINE hoistWeaving #-}
 
 rewriteComposeWeave :: Sem (Weave (Compose t t') r ': r) x
@@ -550,22 +432,18 @@ rewriteComposeWeave = go
 {-# INLINEABLE rewriteComposeWeave #-}
 -- {-# INLINE rewriteComposeWeave #-}
 
-class    (forall x y. Coercible x y => Coercible (t x) (t y))
-      => Representational1 t
-instance (forall x y. Coercible x y => Coercible (t x) (t y))
-      => Representational1 t
-
-weave :: (Traversable t, Representational1 n, Representational1 t)
+weave :: (Traversable t, forall x y. Coercible x y => Coercible (n x) (n y))
       => t ()
       -> (forall x. t (m x) -> n (t x))
       -> (forall r' x. Sem (Weave t r' ': r') x -> Sem r' (t x))
       -> Union r m a
       -> Union r n (t a)
 weave s' wv' lwr' = \(Union pr wav) -> Union pr $ case wav of
-  Sent e n -> Weaved e (Traversal traverse) (<$ s') (wv' . fmap n) lwr'
-  Weaved e (Traversal trav) mkS wv lwr ->
+  Sent e n -> Weaved e (Traversal traverse) (<$ s') (wv' . fmap n) lwr' id
+  Weaved e (Traversal trav) mkS wv lwr ex ->
     let
       cTrav = Traversal (\f -> fmap Compose . traverse (trav f) .# getCompose)
+      cEx = fmap ex .# getCompose
     in
       Weaved
         e
@@ -573,9 +451,10 @@ weave s' wv' lwr' = \(Union pr wav) -> Union pr $ case wav of
         (\x -> Compose $ mkS x <$ s')
         (coerce #. wv' . fmap wv .# getCompose)
         (fmap Compose #. lwr' . lwr . rewriteComposeWeave)
+        cEx
 {-# INLINABLE weave #-}
 {-# SPECIALIZE INLINE
-  weave :: (Traversable t, Representational1 t)
+  weave :: Traversable t
         => t ()
         -> (forall x. t (m x) -> Sem r'' (t x))
         -> (forall r' x. Sem (Weave t r' ': r') x -> Sem r' (t x))
@@ -588,7 +467,7 @@ rewriteWeaving :: (∀ z x. e z x -> e' z x)
                -> Weaving e' m a
 rewriteWeaving t = \case
   Sent e n -> Sent (t e) n
-  Weaved e trav mkS wv lwr -> Weaved (t e) trav mkS wv lwr
+  Weaved e trav mkS wv lwr ex -> Weaved (t e) trav mkS wv lwr ex
 {-# INLINEABLE rewriteWeaving #-}
 
 ------------------------------------------------------------------------------
@@ -609,8 +488,8 @@ rewriteWeaving' :: (∀ z x. e z x -> Bundle r z x)
 rewriteWeaving' t = \case
   Sent e n
     | Bundle pr e' <- t e -> Union pr (Sent e' n)
-  Weaved e trav mkS wv lwr
-    | Bundle pr e' <- t e -> Union pr (Weaved e' trav mkS wv lwr)
+  Weaved e trav mkS wv lwr ex
+    | Bundle pr e' <- t e -> Union pr (Weaved e' trav mkS wv lwr ex)
 {-# INLINEABLE rewriteWeaving' #-}
 -- {-# INLINE rewriteWeaving #-}
 
