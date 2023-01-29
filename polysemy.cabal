@@ -61,6 +61,7 @@ library
       Polysemy.Internal.CustomErrors.Redefined
       Polysemy.Internal.Final
       Polysemy.Internal.Fixpoint
+      Polysemy.Internal.FList
       Polysemy.Internal.HigherOrder
       Polysemy.Internal.Index
       Polysemy.Internal.Kind

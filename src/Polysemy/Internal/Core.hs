@@ -50,10 +50,15 @@ import Unsafe.Coerce
 import GHC.Exts (considerAccessible)
 import Data.Vector (Vector)
 import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as MV
-import qualified Data.Vector.Fusion.Bundle as B
-import qualified Data.Vector.Generic as G
-import qualified Data.Vector.Generic.Mutable as GM
+import Data.Sequence (Seq((:<|)))
+import qualified Data.Sequence as S
+import Polysemy.Internal.FList
+-- import Data.Vector (Vector)
+-- import qualified Data.Vector as V
+-- import qualified Data.Vector.Mutable as MV
+-- import qualified Data.Vector.Fusion.Bundle as B
+-- import qualified Data.Vector.Generic as G
+-- import qualified Data.Vector.Generic.Mutable as GM
 
 -- $setup
 -- >>> import Data.Function
@@ -208,33 +213,22 @@ newtype Sem (r :: EffectRow) a = Sem {
 
 data Handlers r m res where
   Handlers :: (forall x. m x -> z x)
-           -> {-# UNPACK #-} !(HandlerVector r z res)
+           -> !(HandlerVector r z res)
            -> Handlers r m res
 
 emptyHandlers :: Handlers '[] m res
-emptyHandlers = Handlers id (HandlerVector V.empty)
+emptyHandlers = Handlers id (HandlerVector emptyHY)
 {-# INLINE emptyHandlers #-}
 
-forceHandlers :: Handlers r m res -> Handlers r m res
-forceHandlers (Handlers n v) = Handlers n (forceHandlers' v)
-{-# INLINE forceHandlers #-}
-
-forceHandlers' :: HandlerVector r m res -> HandlerVector r m res
-forceHandlers' (HandlerVector v) = HandlerVector $ case V.toArraySlice v of
-  (arr, _, len)
-    -- Only force if the vector is less than 2/3:ds of its original size.
-    | 3*len < 2*sizeofArray arr -> V.force v
-    | otherwise -> v
-{-# INLINE forceHandlers' #-}
 
 emptyHandlers' :: HandlerVector '[] m res
-emptyHandlers' = HandlerVector V.empty
+emptyHandlers' = HandlerVector emptyHY
 {-# INLINE emptyHandlers' #-}
 
 -- expensive
 getHandlerVector :: Handlers r m res -> HandlerVector r m res
 getHandlerVector (Handlers n (HandlerVector hs)) = HandlerVector $
-  V.map (\(Handler' h) -> Handler' $ \wav -> h (hoistWeaving n wav)) hs
+  fmap (\(Handler' h) -> Handler' $ \wav -> h (hoistWeaving n wav)) hs
 {-# INLINE getHandlerVector #-}
 
 imapHandlers' :: (   forall e x
@@ -244,7 +238,7 @@ imapHandlers' :: (   forall e x
                 )
               -> HandlerVector r m res -> HandlerVector r m' res'
 imapHandlers' f (HandlerVector hs) = HandlerVector $
-  V.imap (\i (Handler' h) -> Handler' (f (UnsafeMkElemOf i) h)) hs
+  imapHY (\i (Handler' h) -> Handler' (f (UnsafeMkElemOf i) h)) hs
 
 hoistHandler :: (forall x. m x -> n x)
              -> (forall x. Weaving e n x -> (x -> res) -> res)
@@ -259,10 +253,23 @@ imapHandlers :: (   forall e x
                )
              -> Handlers r m res -> HandlerVector r m' res'
 imapHandlers f (Handlers n (HandlerVector hs)) = HandlerVector $
-  V.imap (\i (Handler' h) ->
-            Handler' (f (UnsafeMkElemOf i) (\wv -> h (hoistWeaving n wv))))
-         hs
+  imapHY (\i (Handler' h) ->
+    Handler' (f (UnsafeMkElemOf i) (\wv -> h (hoistWeaving n wv))))
+    hs
 {-# INLINE imapHandlers #-}
+
+{-
+Best of both worlds is probably a hybrid between FList and Vector.
+Or FList with intermittent memoization.
+Or both.
+
+When operations reaches some threshold compared to the length of the list. Like,
+say, 1.5 times greater than the length of the list
+_or_ ops reaches a cap of... 1000?
+memoizeFList resets operations to 0
+-}
+
+-- data BestList a = BestList {-# UNPACK #-} !(Vector a) {-# UNPACK #-} !(FList a)
 
 mapHandlers' :: (   forall e x
                    . (forall y. Weaving e m y -> (y -> res) -> res)
@@ -270,7 +277,7 @@ mapHandlers' :: (   forall e x
                 )
               -> HandlerVector r m res -> HandlerVector r m' res'
 mapHandlers' f (HandlerVector hs) = HandlerVector $
-  V.map (\(Handler' h) -> Handler' (f h)) hs
+  fmap (\(Handler' h) -> Handler' (f h)) hs
 {-# INLINE mapHandlers' #-}
 
 mapHandlers :: (   forall e x
@@ -279,7 +286,7 @@ mapHandlers :: (   forall e x
               )
             -> Handlers r m res -> HandlerVector r m' res'
 mapHandlers f (Handlers n (HandlerVector hs)) = HandlerVector $
-  V.map (\(Handler' h) -> Handler' (f (\wv -> h (hoistWeaving n wv)))) hs
+  fmap (\(Handler' h) -> Handler' (f (\wv -> h (hoistWeaving n wv)))) hs
 {-# INLINE mapHandlers #-}
 
 mkHandlers :: HandlerVector r m res -> Handlers r m res
@@ -291,7 +298,27 @@ type Handler e m res = forall x. Weaving e m x -> (x -> res) -> res
 newtype Handler' m res = Handler' { unHandler' :: forall e. Handler e m res }
 
 type role HandlerVector representational representational representational
-newtype HandlerVector (r :: EffectRow) m res = HandlerVector (Vector (Handler' m res))
+newtype HandlerVector (r :: EffectRow) m res = HandlerVector (Hybrid (Handler' m res))
+
+{-
+
+Complexity...
+We want SmallArrays.
+
+Invariant = ops <= 20 || (ops <= 1000 && ops < 2 * n + 10)
+
+indexing = O(ops)
+cons = O(1)
+concatenation = O(1)
+fmap = O(1)
+gen = O(1)
+update = O(1)
+
+data FList a = FList {-# UNPACK #-} !(Vector a) {-# UNPACK #-} !Int {-# UNPACK #-} !Int (Int -> a)
+
+
+-}
+
 
 getHandler :: Handlers r m res -> ElemOf e r -> Handler e m res
 getHandler (Handlers to v) pr =
@@ -302,14 +329,19 @@ getHandler (Handlers to v) pr =
 {-# INLINE getHandler #-}
 
 getHandler' :: HandlerVector r m res -> ElemOf e r -> Handler e m res
-getHandler' (HandlerVector v) (UnsafeMkElemOf i) = unHandler' (v V.! i)
+getHandler' (HandlerVector v) (UnsafeMkElemOf i) = unHandler' (indexHY v i)
 {-# INLINE getHandler' #-}
+
+-- lupdate :: Int -> a -> [a] -> [a]
+-- lupdate 0 a (_:xs) = a:xs
+-- lupdate !i a (x:xs) = x : lupdate (i - 1) a xs
+-- lupdate !_ _ _ = []
 
 infixr 5 `concatHandlers'`
 concatHandlers' :: HandlerVector l m res
                 -> HandlerVector r m res
                 -> HandlerVector (Append l r) m res
-concatHandlers' (HandlerVector l) (HandlerVector r) = HandlerVector (l V.++ r)
+concatHandlers' (HandlerVector l) (HandlerVector r) = HandlerVector (l `concatHY` r)
 {-# INLINE concatHandlers' #-}
 
 generateHandlers'
@@ -317,20 +349,17 @@ generateHandlers'
   -> (forall x. ElemOf e r -> Weaving e m x -> (x -> res) -> res)
   -> HandlerVector r m res
 generateHandlers' (UnsafeMkSList s) f =
-  HandlerVector (V.generate s (unsafeCoerce f))
+  HandlerVector (generateHY s (unsafeCoerce f))
 {-# INLINE generateHandlers' #-}
 
-insertHandler' :: forall r e_ e l m res
+replaceHandler' :: forall r e_ e l m res
                 . SList l
                -> Handler e m res
                -> HandlerVector (Append l (e_ ': r)) m res
                -> HandlerVector (Append l (e ': r)) m res
-insertHandler' (UnsafeMkSList i) h (HandlerVector v) =
-  HandlerVector $ V.create $ do
-    mv <- V.thaw v
-    MV.write mv i (unsafeCoerce h)
-    return mv
-{-# INLINE insertHandler' #-}
+replaceHandler' (UnsafeMkSList i) h (HandlerVector v) =
+  HandlerVector $ updateHY i (unsafeCoerce h) v
+{-# INLINE replaceHandler' #-}
 
 interceptHandler' :: forall r e m res
                    . ElemOf e r
@@ -338,17 +367,14 @@ interceptHandler' :: forall r e m res
                   -> HandlerVector r m res
                   -> HandlerVector r m res
 interceptHandler' (UnsafeMkElemOf i) h (HandlerVector v) =
-  HandlerVector $ V.create $ do
-    mv <- V.thaw v
-    MV.write mv i (unsafeCoerce h)
-    return mv
+  HandlerVector $ updateHY i (unsafeCoerce h) v
 {-# INLINE interceptHandler' #-}
 
 infixr 5 `consHandler'`
 consHandler' :: Handler e m res
              -> HandlerVector r m res
              -> HandlerVector (e ': r) m res
-consHandler' h (HandlerVector hs) = HandlerVector (V.cons (unsafeCoerce h) hs)
+consHandler' h (HandlerVector hs) = HandlerVector (unsafeCoerce h `consHY` hs)
 {-# INLINE consHandler' #-}
 
 dropHandlers' :: forall l r m res
@@ -356,7 +382,7 @@ dropHandlers' :: forall l r m res
               => HandlerVector (Append l r) m res
               -> HandlerVector r m res
 dropHandlers' (HandlerVector hs) | UnsafeMkSList l <- singList @l =
-  HandlerVector (V.unsafeDrop l hs)
+  HandlerVector (dropHY l hs)
 {-# INLINE dropHandlers' #-}
 
 takeHandlers' :: forall l r m res
@@ -364,7 +390,7 @@ takeHandlers' :: forall l r m res
               => HandlerVector (Append l r) m res
               -> HandlerVector l m res
 takeHandlers' (HandlerVector hs) | UnsafeMkSList l <- singList @l =
-  HandlerVector (V.unsafeTake l hs)
+  HandlerVector (takeHY l hs)
 {-# INLINE takeHandlers' #-}
 
 splitHandlers' :: forall l r m res
@@ -372,21 +398,44 @@ splitHandlers' :: forall l r m res
                => HandlerVector (Append l r) m res
                -> (HandlerVector l m res, HandlerVector r m res)
 splitHandlers' (HandlerVector hs)
-  | UnsafeMkSList n <- singList @l, (l, r) <- V.splitAt n hs =
+  | UnsafeMkSList n <- singList @l, (l, r) <- splitHY n hs =
       (HandlerVector l, HandlerVector r)
 
 
-data TransformingVector m res
-  = TransedUnbuffered {-# UNPACK #-} !(Vector (Handler' m res))
-  | TransedBuffered
-      {-# UNPACK #-} !Int
-      {-# UNPACK #-} !(B.Bundle Vector (Handler' m res))
-      {-# UNPACK #-} !(Vector (Handler' m res))
+-- data TransformingVector m res
+--   = TransedUnbuffered {-# UNPACK #-} !(Vector (Handler' m res))
+--   | TransedBuffered
+--       {-# UNPACK #-} !Int
+--       {-# UNPACK #-} !(B.Bundle Vector (Handler' m res))
+--       {-# UNPACK #-} !(Vector (Handler' m res))
 
 transformHandlerVector
   :: RowTransformer r r'
   -> (forall m res. HandlerVector r' m res -> HandlerVector r m res)
-transformHandlerVector t0 = \(HandlerVector v) ->
+transformHandlerVector t0 = \(HandlerVector v) -> HandlerVector (go t0 v)
+  where
+    go :: RowTransformer r r'
+       -> Hybrid (Handler' m res) -> Hybrid (Handler' m res)
+    go Id v = v
+    go (Join l r) v = go r $! go l v
+    go (Raise (UnsafeMkSList n)) v = dropHY n v
+    go (Extend (UnsafeMkSList n)) v = dropEndHY n v
+    go (ExtendAlt _ (UnsafeMkSList n)) v = takeHY n v
+    go (Under (UnsafeMkSList n) t) v
+      | (l, r) <- splitHY n v = l `concatHY` go t r
+    go (Subsume (UnsafeMkElemOf pr)) v =
+      let
+        !h = v `indexHY` pr
+      in
+        h `consHY` v
+    go (Expose (UnsafeMkElemOf pr)) v
+      | (!h, v') <- unconsHY v = updateHY pr h v'
+    go (Swap _ (UnsafeMkSList l) (UnsafeMkSList m)) v
+      | (mv, lrv) <- splitHY m v, (lv, rv) <- splitHY l lrv =
+          lv `concatHY` mv `concatHY` rv
+    go (Split _ f g) v = go f v `concatHY` go g v
+
+  {-
   case go t0 (TransedUnbuffered v) of
     TransedUnbuffered v' -> HandlerVector v'
     TransedBuffered _ b v' -> HandlerVector (collapse b v')
@@ -484,6 +533,7 @@ transformHandlerVector t0 = \(HandlerVector v) ->
       h <- MV.unsafeRead mv 0
       MV.unsafeWrite mv (1 + pr) h
       return $ MV.tail mv
+-}
 
 ------------------------------------------------------------------------------
 -- | Rewrite the effect stack of a 'Sem' using with an explicit row transformer

@@ -443,9 +443,8 @@ interpretFast h = go
     go :: InterpreterFor e r
     go = hoistSem $ \hs@(Handlers n v) ->
       let
-        !hs_ = forceHandlers hs
         AHandler !ah = AHandler $ \wv c -> fromFOEff wv $ \ex e ->
-          runSem (h e) hs_ (c . ex)
+          runSem (h e) hs (c . ex)
       in
         Handlers (n . go_) (consHandler' ah v)
     {-# INLINE go #-}

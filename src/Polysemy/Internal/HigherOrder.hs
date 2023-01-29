@@ -456,10 +456,7 @@ interpretH :: forall e r
 interpretH h = go
   where
     go :: forall a'. Sem (e ': r) a' -> Sem r a'
-    go = interpretViaHandlerSlow $ \hs ->
-      let
-        !hs_ = forceHandlers hs
-      in \wav c -> case wav of
+    go = interpretViaHandlerSlow $ \hs wav c -> case wav of
         Sent (e :: e z y) n ->
           let
             goSent :: forall rC x
@@ -467,7 +464,7 @@ interpretH h = go
                    -> Sem rC x
             goSent = interpretViaHandlerFast \n' hs' ->
               let
-                !k' = forceHandlers (Handlers n' hs')
+                k' = Handlers n' hs'
               in \wav' c' -> fromFOEff wav' $ \ex -> \case
                 GetInterpreterH -> c' $ ex $ InterpreterH go_
                 GetProcessorH -> c' $ ex $
@@ -489,7 +486,7 @@ interpretH h = go
             goSent_ = goSent
             {-# NOINLINE goSent_ #-}
           in
-            runSem (goSent (h e)) hs_ c
+            runSem (goSent (h e)) hs c
         Weaved (e :: e z y) (trav :: Traversal t) _ wv lwr ->
           reify trav $ \(_ :: pr s) ->
             let
@@ -528,7 +525,7 @@ interpretH h = go
               goWeaved_ = goWeaved
               {-# NOINLINE goWeaved_ #-}
             in
-              runSem (lwr (goWeaved (h e))) hs_ (c .# coerce)
+              runSem (lwr (goWeaved (h e))) hs (c .# coerce)
     {-# INLINE go #-}
 
     go_ :: forall a'. Sem (e ': r) a' -> Sem r a'

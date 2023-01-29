@@ -50,15 +50,13 @@ splitMeta uniq = go
     go :: Sem (Meta metaeff ': r) a -> Sem (Meta metaeff ': MetaRun ': r) a
     go = hoistSem $ \(Handlers n hs) ->
       let
-        hs_ = forceHandlers' $ takeHandlers' @'[_, _] hs
-
         AHandler hM = AHandler $ \wav ->
           case wav & rewriteWeaving' \case
             MetaMetaRun uniq' metarun
               | uniq == uniq' -> Bundle (There Here) metarun
             other -> Bundle Here other
           of
-            Union pr wav' -> getHandler' hs_ pr wav'
+            Union pr wav' -> getHandler' hs pr wav'
       in
         Handlers (n . go_) (hM `consHandler'` dropHandlers' @'[_, _] hs)
     {-# INLINE go #-}
@@ -378,14 +376,13 @@ exposeMetaRun pr uniq = go
     go :: forall x. Sem r x -> Sem (eff ': r) x
     go = hoistSem $ \(Handlers n hs) ->
       let
-        hs_ = forceHandlers' hs
         AHandler h = AHandler $ \wav ->
           case wav & rewriteWeaving' \case
             MetaRun uniq' act
               | uniq == uniq' -> Bundle Here (unsafeCoerce act)
             metarun -> Bundle (There pr) metarun
           of
-            Union pr wav' -> getHandler' hs_ pr wav'
+            Union pr wav' -> getHandler' hs pr wav'
       in
         Handlers (n . go_) (interceptHandler' pr h (dropHandlers' @'[_] hs))
     {-# INLINE go #-}
@@ -410,10 +407,7 @@ interpretMeta h = \m -> do
          ++ "\tCurrent interpretMeta unique is " ++ show (hashUnique uniq))
 
       go :: InterpreterFor (Meta metaeff) (MetaRun ': r)
-      go = interpretViaHandlerSlow \hs ->
-        let
-          !hs_ = forceHandlers hs
-        in \w c -> case w of
+      go = interpretViaHandlerSlow \hs w c -> case w of
           Sent (MetaMetaRun uniq' (MetaRun effUniq _)) _ ->
             bomb uniq' effUniq
           Weaved (MetaMetaRun uniq' (MetaRun effUniq _)) _ _ _ _ ->
@@ -447,7 +441,7 @@ interpretMeta h = \m -> do
                      -> Sem rC x
               goSent = interpretViaHandlerFast $ \n' hs' ->
                 let
-                  !k' = forceHandlers $ Handlers n' hs'
+                  k' = Handlers n' hs'
                 in \wav c' -> fromFOEff wav $ \ex' -> \case
                   GetInterpreterH -> c' $ ex' $
                     InterpreterH (rewrite HandlingMetaMetaRun
@@ -557,7 +551,7 @@ interpretMeta h = \m -> do
                 {-# NOINLINE goWeaved_ #-}
               in
                 runSem (handlingMetaIntoMetaRun handleHandlingMetaSpecific
-                          (lwr (goWeaved (h metaeff)))) hs_ (c .# coerce)
+                          (lwr (goWeaved (h metaeff)))) hs (c .# coerce)
       {-# INLINE go #-}
 
       go_ :: InterpreterFor (Meta metaeff) (MetaRun ': r)
