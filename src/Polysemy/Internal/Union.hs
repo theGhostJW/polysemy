@@ -14,6 +14,9 @@
 {-# LANGUAGE UndecidableSuperClasses #-}
 {-# LANGUAGE ViewPatterns            #-}
 
+-- johns bodge
+{-# OPTIONS_GHC -Wno-overlapping-patterns #-}
+
 {-# OPTIONS_HADDOCK not-home, prune #-}
 
 -- | Description: 'Union', 'Weaving' and 'ElemOf', Polysemy's core types
