@@ -17,19 +17,19 @@ category:            Polysemy
 description:         Please see the README on GitHub at <https://github.com/polysemy-research/polysemy/tree/master/polysemy-plugin#readme>
 
 dependencies:
-- base >= 4.9 && < 5
-- ghc >= 8.6.5 && < 10
-- ghc-tcplugins-extra >= 0.3 && < 0.5
-- polysemy >= 1.7
-- syb >= 0.7 && < 0.8
-- transformers >= 0.5.2.0 && < 0.6
-- containers >= 0.5 && < 0.7
+- base
+- ghc
+- ghc-tcplugins-extra
+- polysemy
+- syb
+- transformers
+- containers
 
 custom-setup:
   dependencies:
-    - base >= 4.9 && < 5
+    - base
     - Cabal
-    - cabal-doctest >=1.0.6 && <1.1
+    - cabal-doctest
 
 library:
   source-dirs: src
@@ -58,12 +58,12 @@ tests:
         - -dsuppress-all
     dependencies:
     - hspec-discover
-    - polysemy >= 1.3.0.0
+    - polysemy
     - polysemy-plugin
-    - hspec >= 2.6.0 && < 3
-    - should-not-typecheck >= 2.1.0 && < 3
-    - inspection-testing >= 0.4.2 && < 0.6
-    - doctest >= 0.16.0.1 && < 0.21
+    - hspec
+    - should-not-typecheck
+    - inspection-testing
+    - doctest
     generated-other-modules:
     - Build_doctests
 
